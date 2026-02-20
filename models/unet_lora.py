@@ -19,6 +19,8 @@ class UnetLora:
             subfolder="unet",
             torch_dtype=torch_dtype,
             in_channels=in_channels,
+            low_cpu_mem_usage=False,
+            ignore_mismatched_sizes=True,
         )
 
     def to(self, device: torch.device | str) -> "UnetLora":
