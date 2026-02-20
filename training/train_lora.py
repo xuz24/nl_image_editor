@@ -45,10 +45,10 @@ scheduler = Scheduler()
 # 4. LoRA Injection
 # -------------------------
 lora_config = LoraConfig(
-    r=4,
-    lora_alpha=16,
-    target_modules=["attn1", "attn2"],
-    lora_dropout=0.05,
+    r=config.get("lora_rank", 4),
+    lora_alpha=config.get("lora_alpha", 16),
+    target_modules=config.get("lora_target_modules", ["to_q", "to_k", "to_v", "to_out.0"]),
+    lora_dropout=config.get("lora_dropout", 0.05),
     bias="none",
     task_type=TaskType.FEATURE_EXTRACTION,
 )
