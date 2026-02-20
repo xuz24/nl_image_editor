@@ -18,10 +18,10 @@ from tqdm import tqdm
 with open("configs/training_config.yaml") as f:
     config = yaml.safe_load(f)
 
-BATCH_SIZE = config["batch_size"]
-LR = config["learning_rate"]
-STEPS = config["num_training_steps"]
-SAVE_EVERY = config["save_every"]
+BATCH_SIZE = int(config["batch_size"])
+LR = float(config["learning_rate"])
+STEPS = int(config["num_training_steps"])
+SAVE_EVERY = int(config["save_every"])
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
