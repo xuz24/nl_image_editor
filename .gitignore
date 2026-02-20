@@ -19,6 +19,3 @@ data/pico-banana/
 # Misc tooling
 .DS_Store
 *.swp
-
-# slurm output files
-.txt

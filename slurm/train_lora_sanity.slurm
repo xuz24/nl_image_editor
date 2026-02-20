@@ -16,6 +16,7 @@ set -Eeuo pipefail
 
 REPO_DIR="$SLURM_SUBMIT_DIR"
 cd "$REPO_DIR"
+export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 mkdir -p logs
 
 # Load whatever modules your cluster requires. Adjust/remove as needed.

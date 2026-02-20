@@ -1,7 +1,7 @@
 accelerate
 diffusers
 numpy
-peft>=0.8
+peft>=0.11
 Pillow
 PyYAML
 torch>=2.1

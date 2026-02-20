@@ -6,7 +6,7 @@ from data.loaders import PicoBananaDataset
 
 import torch
 from torch.utils.data import DataLoader
-from peft import LoraConfig
+from peft import LoraConfig, TaskType
 import os
 import yaml
 from tqdm import tqdm
@@ -50,7 +50,7 @@ lora_config = LoraConfig(
     target_modules=["attn1", "attn2"],
     lora_dropout=0.05,
     bias="none",
-    task_type="UNET"
+    task_type=TaskType.FEATURE_EXTRACTION,
 )
 unet_lora = unet.get_model(lora_config)
 
