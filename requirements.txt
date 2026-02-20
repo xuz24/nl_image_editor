@@ -1,0 +1,11 @@
+accelerate
+diffusers
+numpy
+peft>=0.8
+Pillow
+PyYAML
+torch>=2.1
+torchvision
+tqdm
+transformers
+wandb

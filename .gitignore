@@ -1,0 +1,22 @@
+# Environments & caches
+.venv/
+.env
+.cache/
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Training outputs
+checkpoints/
+logs/
+
+# Dataset artifacts
+data/pico-banana/
+
+# Misc tooling
+.DS_Store
+*.swp
+

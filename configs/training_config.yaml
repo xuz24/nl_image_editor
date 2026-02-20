@@ -1,0 +1,6 @@
+resolution: 256
+batch_size: 2
+learning_rate: 5e-5
+lora_rank: 4
+num_training_steps: 50000
+save_every: 5000
