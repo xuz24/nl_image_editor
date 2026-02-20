@@ -23,7 +23,8 @@ LR = float(config["learning_rate"])
 STEPS = int(config["num_training_steps"])
 SAVE_EVERY = int(config["save_every"])
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DTYPE = torch.float32
+DTYPE = torch.float16 if torch.cuda.is_available() else torch.float32
+UNET_IN_CHANNELS = 8  # concat(z_noisy, z_src)
 
 
 # -------------------------
@@ -31,7 +32,7 @@ DTYPE = torch.float32
 # -------------------------
 
 vae = VAE(torch_dtype=DTYPE).to(DEVICE)
-unet = UnetLora(torch_dtype=DTYPE).to(DEVICE)
+unet = UnetLora(torch_dtype=DTYPE, in_channels=UNET_IN_CHANNELS).to(DEVICE)
 clip = CLIPEncoder().to(DEVICE)
 
 scheduler = Scheduler()
@@ -88,16 +89,16 @@ for step in range(STEPS):
         noise = torch.randn_like(z_tgt)
         t = torch.randint(0, scheduler.num_train_timesteps, (z_tgt.shape[0],), device=DEVICE)
         z_noisy = scheduler.add_noise(z_tgt, noise, t)
+        z_input = torch.cat([z_noisy, z_src], dim=1)
 
         # encode text
         text_emb = clip.text_encoder(instr_ids)[0]
 
         # forward pass
         eps_pred = unet_lora(
-            z_noisy,
+            z_input,
             t,
             encoder_hidden_states=text_emb,
-            cross_attention_kwargs={"source_latent": z_src},
         ).sample
 
         # compute loss
