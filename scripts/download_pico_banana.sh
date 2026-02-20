@@ -100,7 +100,8 @@ download_file() {
     return
   fi
   echo "[fetch] Downloading $label from $url"
-  curl --fail --retry 5 --retry-all-errors --compressed -L "$url" -o "$dest.tmp"
+  # Some environments ship older curl without --retry-all-errors, so keep flags portable.
+  curl --fail --retry 5 --retry-connrefused --compressed -L "$url" -o "$dest.tmp"
   mv "$dest.tmp" "$dest"
 }
 
