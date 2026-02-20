@@ -23,14 +23,15 @@ LR = float(config["learning_rate"])
 STEPS = int(config["num_training_steps"])
 SAVE_EVERY = int(config["save_every"])
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DTYPE = torch.float16 if torch.cuda.is_available() else torch.float32
 
 
 # -------------------------
 # 3. Load Models
 # -------------------------
 
-vae = VAE().to(DEVICE)
-unet = UnetLora().to(DEVICE)
+vae = VAE(torch_dtype=DTYPE).to(DEVICE)
+unet = UnetLora(torch_dtype=DTYPE).to(DEVICE)
 clip = CLIPEncoder().to(DEVICE)
 
 scheduler = Scheduler()
