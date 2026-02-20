@@ -8,6 +8,8 @@
 #SBATCH --time=00:30:00
 #SBATCH --output=logs/pico-banana-test-%j.out
 #SBATCH --error=logs/pico-banana-test-%j.err
+#SBATCH --output=output_%j.txt
+#SBATCH --account=eecs476w26s_class
 
 # Fail fast on errors/undefined vars inside the job
 set -Eeuo pipefail
