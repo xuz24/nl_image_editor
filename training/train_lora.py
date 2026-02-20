@@ -93,7 +93,12 @@ for step in range(STEPS):
         text_emb = clip.text_encoder(instr_ids)[0]
 
         # forward pass
-        eps_pred = unet_lora(z_noisy, t, encoder_hidden_states=text_emb, cross_attention_kwargs={"source_latent": z_src})
+        eps_pred = unet_lora(
+            z_noisy,
+            t,
+            encoder_hidden_states=text_emb,
+            cross_attention_kwargs={"source_latent": z_src},
+        ).sample
 
         # compute loss
         loss = torch.nn.functional.mse_loss(eps_pred, noise)
