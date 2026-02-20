@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 from diffusers import UNet2DConditionModel
-from peft import get_peft_model
+from peft.tuners.lora import LoraModel
 
 
 class UnetLora:
@@ -15,5 +15,5 @@ class UnetLora:
         self.unet = self.unet.to(device)
         return self
 
-    def get_model(self, lora_config):
-        return get_peft_model(self.unet, lora_config)
+    def get_model(self, lora_config, adapter_name: str = "default"):
+        return LoraModel(self.unet, lora_config, adapter_name)
