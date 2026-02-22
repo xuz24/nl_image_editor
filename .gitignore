@@ -19,3 +19,5 @@ data/pico-banana/
 # Misc tooling
 .DS_Store
 *.swp
+
+outputs/

@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=pico-banana-test
+#SBATCH --job-name=pico-banana-train
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --time=00:30:00
+#SBATCH --time=03:00:00
 #SBATCH --output=logs/pico-banana-test-%j.out
 #SBATCH --error=logs/pico-banana-test-%j.err
 #SBATCH --account=eecs476w26s_class
@@ -53,14 +53,13 @@ cleanup_cfg() {
 }
 trap cleanup_cfg EXIT
 
-# Keep the sanity check tiny so it fits in 30 minutes on a single GPU.
 cat <<'EOF' > "$TRAIN_CFG"
 resolution: 256
 batch_size: 1
 learning_rate: 1e-4
 lora_rank: 4
-num_training_steps: 100
-save_every: 25
+num_training_steps: 50000
+save_every: 10000
 EOF
 
 # Run the shortened training loop.

@@ -78,7 +78,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+    dtype = torch.float32
 
     if args.seed is not None:
         torch.manual_seed(args.seed)

@@ -26,6 +26,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.float32
 UNET_IN_CHANNELS = 8  # concat(z_noisy, z_src)
 
+print(f"BATCH SIZE: {BATCH_SIZE} \nLR : {LR} \nSTEPS: {STEPS} \nSAVE_EVERY: {SAVE_EVERY} \nDEVICE: {DEVICE}")
 
 # -------------------------
 # 3. Load Models
@@ -36,6 +37,8 @@ unet = UnetLora(torch_dtype=DTYPE, in_channels=UNET_IN_CHANNELS).to(DEVICE)
 clip = CLIPEncoder().to(DEVICE)
 
 scheduler = Scheduler()
+
+scaler = torch.cuda.amp.GradScaler()
 
 # vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse", torch_dtype=torch.float16).to(DEVICE)
 # unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet", torch_dtype=torch.float16).to(DEVICE)
@@ -51,17 +54,13 @@ lora_config = LoraConfig(
     lora_alpha=config.get("lora_alpha", 16),
     target_modules=config.get("lora_target_modules", ["to_q", "to_k", "to_v", "to_out.0"]),
     lora_dropout=config.get("lora_dropout", 0.05),
-    bias="none",
-    task_type=TaskType.FEATURE_EXTRACTION,
+    bias="none"
 )
 unet_lora = unet.get_model(lora_config)
 
 # Freeze everything else
 vae.autoencoder.requires_grad_(False)
 clip.text_encoder.requires_grad_(False)
-for param in unet_lora.parameters():
-    if not param.requires_grad:
-        param.requires_grad = False
 
 optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, unet_lora.parameters()), lr=LR)
 
@@ -74,7 +73,9 @@ loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
 # -------------------------
 # 6. Training Loop
 # -------------------------
-for step in range(STEPS):
+step = 0
+# while step < STEPS:
+for _ in range(2):
     for src_imgs, tgt_imgs, instr_ids in tqdm(loader):
         src_imgs = src_imgs.to(DEVICE)
         tgt_imgs = tgt_imgs.to(DEVICE)
@@ -93,23 +94,33 @@ for step in range(STEPS):
 
         # encode text
         text_emb = clip.text_encoder(instr_ids)[0]
-
+        
         # forward pass
-        eps_pred = unet_lora(
-            z_input,
-            t,
-            encoder_hidden_states=text_emb,
-        ).sample
+        with torch.cuda.amp.autocast(enabled=False):
+            eps_pred = unet_lora(
+                z_input,
+                t,
+                encoder_hidden_states=text_emb,
+            ).sample
 
         # compute loss
-        loss = torch.nn.functional.mse_loss(eps_pred, noise)
+            loss = torch.nn.functional.mse_loss(eps_pred, noise)
+            
+            if step % 100 == 0:
+                print(f"[step {step}] loss = {loss.item():.6f}")
+            
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        step += 1
 
-    # Save checkpoint
-    if step % SAVE_EVERY == 0:
-        ckpt_path = f"checkpoints/lora_step_{step}.pt"
-        os.makedirs("checkpoints", exist_ok=True)
-        torch.save(unet_lora.state_dict(), ckpt_path)
-        print(f"Saved checkpoint: {ckpt_path}")
+        # Save checkpoint
+        # if step % SAVE_EVERY == 0:
+        #     ckpt_path = f"checkpoints/lora_step_{step}.pt"
+        #     os.makedirs("checkpoints", exist_ok=True)
+        #     torch.save(unet_lora.state_dict(), ckpt_path)
+        #     print(f"Saved checkpoint: {ckpt_path}")
+        
+        # if step >= STEPS:
+        #     break

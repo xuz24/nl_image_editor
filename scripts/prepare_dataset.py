@@ -45,6 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--retries", type=int, default=5, help="Download retries per file.")
     parser.add_argument("--timeout", type=int, default=45, help="HTTP timeout per request in seconds.")
     parser.add_argument("--overwrite", action="store_true", help="Recreate samples even if the folder exists.")
+    parser.add_argument("--start-index", type=int, default=0, help="Start processing from this JSONL index (default: 0).")
     return parser.parse_args()
 
 
@@ -59,10 +60,14 @@ class SampleRecord:
     edit_type: Optional[str]
 
 
-def iter_samples(jsonl_path: Path, max_samples: int, split: str) -> Iterable[SampleRecord]:
+def iter_samples(jsonl_path: Path, max_samples: int, split: str, start_index: int) -> Iterable[SampleRecord]:
     count = 0
     with jsonl_path.open("r", encoding="utf-8") as handle:
         for idx, line in enumerate(handle):
+            if idx < start_index:
+                count += 1
+                continue
+            
             line = line.strip()
             if not line:
                 continue
@@ -192,7 +197,7 @@ def main() -> None:
         print(f"Metadata file not found: {jsonl_path}", file=sys.stderr)
         sys.exit(1)
 
-    samples = list(iter_samples(jsonl_path, args.max_samples, args.split))
+    samples = list(iter_samples(jsonl_path, args.max_samples, args.split, args.start_index))
     if not samples:
         print("No samples found in JSONL metadata.", file=sys.stderr)
         sys.exit(1)

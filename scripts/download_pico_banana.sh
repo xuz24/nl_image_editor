@@ -123,6 +123,7 @@ python3 "$SCRIPT_DIR/prepare_dataset.py" \
   --workers "$WORKERS" \
   --retries "$RETRIES" \
   --timeout "$TIMEOUT" \
+  --start-index 9000 \
   ${PYTHON_ARGS:+${PYTHON_ARGS[@]}}
 
 echo "[done] Dataset ready at $OUTPUT_DIR"
