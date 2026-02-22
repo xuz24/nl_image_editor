@@ -6,7 +6,7 @@ from data.loaders import PicoBananaDataset
 
 import torch
 from torch.utils.data import DataLoader
-from peft import LoraConfig, TaskType
+from peft import LoraConfig
 import os
 import yaml
 from tqdm import tqdm
@@ -23,7 +23,7 @@ LR = float(config["learning_rate"])
 STEPS = int(config["num_training_steps"])
 SAVE_EVERY = int(config["save_every"])
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DTYPE = torch.float32
+DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
 UNET_IN_CHANNELS = 8  # concat(z_noisy, z_src)
 
 print(f"BATCH SIZE: {BATCH_SIZE} \nLR : {LR} \nSTEPS: {STEPS} \nSAVE_EVERY: {SAVE_EVERY} \nDEVICE: {DEVICE}")
@@ -38,7 +38,7 @@ clip = CLIPEncoder().to(DEVICE)
 
 scheduler = Scheduler()
 
-scaler = torch.cuda.amp.GradScaler()
+scaler = torch.cuda.amp.GradScaler(enabled=(DEVICE == "cuda"))
 
 # vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse", torch_dtype=torch.float16).to(DEVICE)
 # unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet", torch_dtype=torch.float16).to(DEVICE)
@@ -54,7 +54,7 @@ lora_config = LoraConfig(
     lora_alpha=config.get("lora_alpha", 16),
     target_modules=config.get("lora_target_modules", ["to_q", "to_k", "to_v", "to_out.0"]),
     lora_dropout=config.get("lora_dropout", 0.05),
-    bias="none"
+    bias="none",
 )
 unet_lora = unet.get_model(lora_config)
 
@@ -62,7 +62,22 @@ unet_lora = unet.get_model(lora_config)
 vae.autoencoder.requires_grad_(False)
 clip.text_encoder.requires_grad_(False)
 
+# Keep 8-channel conditioning: conv_in is randomly initialized due channel mismatch,
+# so it must be trainable or the model cannot learn to use concatenated latents.
+unet_lora.model.conv_in.requires_grad_(True)
+
 optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, unet_lora.parameters()), lr=LR)
+
+# Sanity-check trainable params: ensure conv_in + LoRA adapters are trainable.
+total_params = sum(p.numel() for p in unet_lora.parameters())
+trainable_params = sum(p.numel() for p in unet_lora.parameters() if p.requires_grad)
+trainable_names = [name for name, p in unet_lora.named_parameters() if p.requires_grad]
+print(
+    f"UNet params: total={total_params:,} trainable={trainable_params:,} "
+    f"({100.0 * trainable_params / total_params:.4f}%)"
+)
+print(f"conv_in trainable: {unet_lora.model.conv_in.weight.requires_grad}")
+print(f"Sample trainable tensors: {trainable_names[:12]}")
 
 # -------------------------
 # 5. Prepare DataLoader
@@ -74,9 +89,11 @@ loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
 # 6. Training Loop
 # -------------------------
 step = 0
-# while step < STEPS:
-for _ in range(2):
+while step < STEPS:
     for src_imgs, tgt_imgs, instr_ids in tqdm(loader):
+        if step >= STEPS:
+            break
+
         src_imgs = src_imgs.to(DEVICE)
         tgt_imgs = tgt_imgs.to(DEVICE)
         instr_ids = instr_ids.to(DEVICE)
@@ -93,34 +110,35 @@ for _ in range(2):
         z_input = torch.cat([z_noisy, z_src], dim=1)
 
         # encode text
-        text_emb = clip.text_encoder(instr_ids)[0]
+        with torch.no_grad():
+            text_emb = clip.text_encoder(instr_ids)[0]
         
         # forward pass
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.cuda.amp.autocast(enabled=(DEVICE == "cuda")):
             eps_pred = unet_lora(
                 z_input,
                 t,
                 encoder_hidden_states=text_emb,
             ).sample
 
-        # compute loss
             loss = torch.nn.functional.mse_loss(eps_pred, noise)
             
             if step % 100 == 0:
                 print(f"[step {step}] loss = {loss.item():.6f}")
             
         optimizer.zero_grad()
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        if DEVICE == "cuda":
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
         step += 1
 
         # Save checkpoint
-        # if step % SAVE_EVERY == 0:
-        #     ckpt_path = f"checkpoints/lora_step_{step}.pt"
-        #     os.makedirs("checkpoints", exist_ok=True)
-        #     torch.save(unet_lora.state_dict(), ckpt_path)
-        #     print(f"Saved checkpoint: {ckpt_path}")
-        
-        # if step >= STEPS:
-        #     break
+        if step % SAVE_EVERY == 0:
+            ckpt_path = f"checkpoints/lora_step_{step}.pt"
+            os.makedirs("checkpoints", exist_ok=True)
+            torch.save(unet_lora.state_dict(), ckpt_path)
+            print(f"Saved checkpoint: {ckpt_path}")
