@@ -82,7 +82,13 @@ print(f"Sample trainable tensors: {trainable_names[:12]}")
 # -------------------------
 # 5. Prepare DataLoader
 # -------------------------
-dataset = PicoBananaDataset("/scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana", clip.tokenizer, resolution=config["resolution"])
+dataset = PicoBananaDataset(
+    config.get("dataset_root", "data/pico-banana"),
+    clip.tokenizer,
+    resolution=config["resolution"],
+    jsonl_path=config.get("dataset_jsonl"),
+    output_root=config.get("dataset_output_root"),
+)
 loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
 
 # -------------------------

@@ -93,8 +93,9 @@ if [[ $SKIP_DOWNLOAD -eq 0 ]]; then
     [[ -f "$TAR0" ]] || aws s3 --no-sign-request --endpoint-url https://s3.amazonaws.com cp s3://open-images-dataset/tar/train_0.tar.gz "$TAR0"
     [[ -f "$TAR1" ]] || aws s3 --no-sign-request --endpoint-url https://s3.amazonaws.com cp s3://open-images-dataset/tar/train_1.tar.gz "$TAR1"
   else
-    [[ -f "$TAR0" ]] || curl -fL https://storage.googleapis.com/openimages/tar/train_0.tar.gz -o "$TAR0"
-    [[ -f "$TAR1" ]] || curl -fL https://storage.googleapis.com/openimages/tar/train_1.tar.gz -o "$TAR1"
+    # Match the official Open Images S3 bucket URLs when awscli is unavailable.
+    [[ -f "$TAR0" ]] || curl -fL https://s3.amazonaws.com/open-images-dataset/tar/train_0.tar.gz -o "$TAR0"
+    [[ -f "$TAR1" ]] || curl -fL https://s3.amazonaws.com/open-images-dataset/tar/train_1.tar.gz -o "$TAR1"
   fi
 
   [[ -f "$CSV_PATH" ]] || curl -fL https://storage.googleapis.com/openimages/2018_04/train/train-images-boxable-with-rotation.csv -o "$CSV_PATH"
