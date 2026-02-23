@@ -23,10 +23,10 @@ LR = float(config["learning_rate"])
 STEPS = int(config["num_training_steps"])
 SAVE_EVERY = int(config["save_every"])
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
+DTYPE = torch.float32
 UNET_IN_CHANNELS = 8  # concat(z_noisy, z_src)
 
-print(f"BATCH SIZE: {BATCH_SIZE} \nLR : {LR} \nSTEPS: {STEPS} \nSAVE_EVERY: {SAVE_EVERY} \nDEVICE: {DEVICE}")
+print(f"BATCH SIZE: {BATCH_SIZE} \nLR: {LR} \nSTEPS: {STEPS} \nSAVE_EVERY: {SAVE_EVERY} \nDEVICE: {DEVICE} \nDTYPE: {DTYPE}")
 
 # -------------------------
 # 3. Load Models
@@ -38,7 +38,7 @@ clip = CLIPEncoder().to(DEVICE)
 
 scheduler = Scheduler()
 
-scaler = torch.cuda.amp.GradScaler(enabled=(DEVICE == "cuda"))
+scaler = torch.cuda.amp.GradScaler()
 
 # vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse", torch_dtype=torch.float16).to(DEVICE)
 # unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet", torch_dtype=torch.float16).to(DEVICE)
@@ -82,7 +82,7 @@ print(f"Sample trainable tensors: {trainable_names[:12]}")
 # -------------------------
 # 5. Prepare DataLoader
 # -------------------------
-dataset = PicoBananaDataset("data/pico-banana", clip.tokenizer, resolution=config["resolution"])
+dataset = PicoBananaDataset("/scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana", clip.tokenizer, resolution=config["resolution"])
 loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
 
 # -------------------------
@@ -114,7 +114,7 @@ while step < STEPS:
             text_emb = clip.text_encoder(instr_ids)[0]
         
         # forward pass
-        with torch.cuda.amp.autocast(enabled=(DEVICE == "cuda")):
+        with torch.cuda.amp.autocast(enabled=False):
             eps_pred = unet_lora(
                 z_input,
                 t,
@@ -123,7 +123,7 @@ while step < STEPS:
 
             loss = torch.nn.functional.mse_loss(eps_pred, noise)
             
-            if step % 100 == 0:
+            if step % SAVE_EVERY == 0:
                 print(f"[step {step}] loss = {loss.item():.6f}")
             
         optimizer.zero_grad()

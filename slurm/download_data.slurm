@@ -3,7 +3,7 @@
 #SBATCH --nodes=4
 #SBATCH --cpus-per-task=18
 #SBATCH --mem=16G
-#SBATCH --time=04:00:00
+#SBATCH --time=06:00:00
 #SBATCH --output=logs/pico-banana-test-%j.out
 #SBATCH --error=logs/pico-banana-test-%j.err
 #SBATCH --account=eecs476w26s_class
@@ -37,5 +37,5 @@ python -m pip install --upgrade pip
 python -m pip install --requirement requirements.txt --progress-bar off
 
 
-bash scripts/download_pico_banana.sh --max-samples 10000 --workers 18
+bash scripts/download_pico_banana.sh --max-samples 10000 --workers 18 --output-dir /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana
 

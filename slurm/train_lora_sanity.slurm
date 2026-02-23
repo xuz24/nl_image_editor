@@ -12,7 +12,7 @@
 
 # Fail fast on errors/undefined vars inside the job
 set -Eeuo pipefail
-
+source ~/.bashrc
 REPO_DIR="$SLURM_SUBMIT_DIR"
 cd "$REPO_DIR"
 export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
@@ -25,7 +25,7 @@ module load python/3.10
 
 # Optionally point to a shared HF cache so repeated jobs reuse checkpoints.
 export HF_HOME="$REPO_DIR/.cache/huggingface"
-export HF_TOKEN="${HF_TOKEN:-}"
+#export HF_TOKEN="${HF_TOKEN:-}"
 export WANDB_MODE=offline
 export PYTORCH_ENABLE_MPS_FALLBACK=1
 
@@ -60,7 +60,7 @@ batch_size: 1
 learning_rate: 1e-4
 lora_rank: 4
 num_training_steps: 100
-save_every: 25
+save_every: 900
 EOF
 
 # Run the shortened training loop.
