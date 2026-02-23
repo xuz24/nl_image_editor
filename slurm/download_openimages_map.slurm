@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=pico-openimages-map
-#SBATCH --partition=cpu
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=12:00:00
+#SBATCH --time=8:00:00
 #SBATCH --output=logs/pico-openimages-map-%j.out
 #SBATCH --error=logs/pico-openimages-map-%j.err
+#SBATCH --account=eecs476w26s_class
 
 set -Eeuo pipefail
 
@@ -55,3 +55,6 @@ echo "Running: ${CMD[*]}"
 "${CMD[@]}"
 
 echo "Job completed successfully."
+
+
+#sbatch --export=ALL,WORK_DIR="/scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana",JSONL_LIST="/scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana/sft.jsonl" slurm/download_openimages_map.slurm
