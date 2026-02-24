@@ -10,6 +10,7 @@ from peft import LoraConfig
 import os
 import yaml
 from tqdm import tqdm
+from contextlib import nullcontext
 
 
 # -------------------------
@@ -23,15 +24,17 @@ LR = float(config["learning_rate"])
 STEPS = int(config["num_training_steps"])
 SAVE_EVERY = int(config["save_every"])
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-# Use mixed precision on CUDA by default; keep fp32 on CPU.
-DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
+# Keep trainable params in fp32 for optimizer stability.
+DTYPE = torch.float32
 UNET_IN_CHANNELS = 8  # concat(z_noisy, z_src)
-USE_AMP = DEVICE == "cuda" and DTYPE == torch.float16
-USE_SCALER = DEVICE == "cuda" and DTYPE != torch.float16
+USE_AMP = DEVICE == "cuda"
+AMP_DTYPE = torch.bfloat16 if (DEVICE == "cuda" and torch.cuda.is_bf16_supported()) else torch.float16
+USE_SCALER = DEVICE == "cuda" and AMP_DTYPE == torch.float16
 
 print(
     f"BATCH SIZE: {BATCH_SIZE} \nLR: {LR} \nSTEPS: {STEPS} \nSAVE_EVERY: {SAVE_EVERY} "
-    f"\nDEVICE: {DEVICE} \nDTYPE: {DTYPE} \nUSE_AMP: {USE_AMP} \nUSE_SCALER: {USE_SCALER}"
+    f"\nDEVICE: {DEVICE} \nDTYPE: {DTYPE} \nUSE_AMP: {USE_AMP} "
+    f"\nAMP_DTYPE: {AMP_DTYPE if USE_AMP else 'n/a'} \nUSE_SCALER: {USE_SCALER}"
 )
 
 # -------------------------
@@ -153,7 +156,8 @@ while step < STEPS:
             text_emb = text_emb.to(dtype=z_input.dtype)
         
         # forward pass
-        with torch.amp.autocast("cuda", enabled=USE_AMP):
+        amp_ctx = torch.amp.autocast("cuda", dtype=AMP_DTYPE) if USE_AMP else nullcontext()
+        with amp_ctx:
             eps_pred = unet_lora(
                 z_input,
                 t,
@@ -166,12 +170,18 @@ while step < STEPS:
                 print(f"[step {step}] loss = {loss.item():.6f}")
             
         optimizer.zero_grad(set_to_none=True)
+        if not torch.isfinite(loss):
+            raise RuntimeError(f"Non-finite loss at step {step}: {loss.item()}")
+
         if USE_SCALER:
             scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(unet_lora.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
         else:
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(unet_lora.parameters(), max_norm=1.0)
             optimizer.step()
         step += 1
 
