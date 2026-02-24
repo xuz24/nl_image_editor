@@ -184,7 +184,7 @@ def run_validation(step: int) -> None:
         text_emb = clip.text_encoder(tok.input_ids.to(DEVICE))[0].to(dtype=DTYPE)
 
         val_scheduler.set_timesteps(val_steps)
-        amp_ctx = torch.amp.autocast("cuda", dtype=AMP_DTYPE) if USE_AMP else nullcontext()
+        amp_ctx = torch.amp.autocast("cuda", dtype=AMP_DTYPE) if use_amp_runtime else nullcontext()
         for ts in val_scheduler.timesteps:
             z_input = torch.cat([z, z_src], dim=1)
             with amp_ctx:
@@ -204,6 +204,7 @@ def run_validation(step: int) -> None:
 # -------------------------
 step = 0
 loss_history = deque(maxlen=LOSS_WINDOW)
+use_amp_runtime = USE_AMP
 while step < STEPS:
     for src_imgs, tgt_imgs, instr_ids in tqdm(loader, file=sys.stdout):
         if step >= STEPS:
@@ -230,7 +231,7 @@ while step < STEPS:
             text_emb = text_emb.to(dtype=z_input.dtype)
         
         # forward pass
-        amp_ctx = torch.amp.autocast("cuda", dtype=AMP_DTYPE) if USE_AMP else nullcontext()
+        amp_ctx = torch.amp.autocast("cuda", dtype=AMP_DTYPE) if use_amp_runtime else nullcontext()
         with amp_ctx:
             eps_pred = unet_lora(
                 z_input,
@@ -239,15 +240,40 @@ while step < STEPS:
             ).sample
 
             loss = torch.nn.functional.mse_loss(eps_pred, noise)
-            loss_history.append(loss.item())
-
-            if step % LOG_EVERY == 0:
-                avg_loss = sum(loss_history) / len(loss_history)
-                print(f"[step {step}] loss = {loss.item():.6f} | loss_ma{LOSS_WINDOW} = {avg_loss:.6f}")
             
         optimizer.zero_grad(set_to_none=True)
         if not torch.isfinite(loss):
-            raise RuntimeError(f"Non-finite loss at step {step}: {loss.item()}")
+            print(
+                f"[warn] non-finite loss at step {step} "
+                f"(amp={use_amp_runtime}, amp_dtype={AMP_DTYPE if use_amp_runtime else 'n/a'})"
+            )
+            print(
+                f"[warn] finite flags: z_input={torch.isfinite(z_input).all().item()} "
+                f"text_emb={torch.isfinite(text_emb).all().item()} "
+                f"noise={torch.isfinite(noise).all().item()} "
+                f"eps_pred={torch.isfinite(eps_pred).all().item()}"
+            )
+            if use_amp_runtime:
+                # Retry same step in full precision, then keep AMP disabled for stability.
+                with nullcontext():
+                    eps_pred = unet_lora(
+                        z_input,
+                        t,
+                        encoder_hidden_states=text_emb,
+                    ).sample
+                    loss = torch.nn.functional.mse_loss(eps_pred, noise)
+                if torch.isfinite(loss):
+                    use_amp_runtime = False
+                    print("[warn] AMP disabled after instability; continuing in fp32 forward.")
+                else:
+                    raise RuntimeError(f"Non-finite loss at step {step}: {loss.item()}")
+            else:
+                raise RuntimeError(f"Non-finite loss at step {step}: {loss.item()}")
+
+        loss_history.append(loss.item())
+        if step % LOG_EVERY == 0:
+            avg_loss = sum(loss_history) / len(loss_history)
+            print(f"[step {step}] loss = {loss.item():.6f} | loss_ma{LOSS_WINDOW} = {avg_loss:.6f}")
 
         if USE_SCALER:
             scaler.scale(loss).backward()
