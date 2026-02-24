@@ -66,6 +66,9 @@ lora_config = LoraConfig(
 )
 unet_lora = unet.get_model(lora_config)
 
+# state = torch.load("/home/xuzijie/nl_image_editor/checkpoints/lora_step_100000.pt", map_location=DEVICE)
+# unet_lora.load_state_dict(state, strict=False)
+
 # Freeze everything else
 vae.autoencoder.requires_grad_(False)
 clip.text_encoder.requires_grad_(False)
