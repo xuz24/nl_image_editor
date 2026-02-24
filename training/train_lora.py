@@ -26,8 +26,13 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # Use mixed precision on CUDA by default; keep fp32 on CPU.
 DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
 UNET_IN_CHANNELS = 8  # concat(z_noisy, z_src)
+USE_AMP = DEVICE == "cuda" and DTYPE == torch.float16
+USE_SCALER = DEVICE == "cuda" and DTYPE != torch.float16
 
-print(f"BATCH SIZE: {BATCH_SIZE} \nLR: {LR} \nSTEPS: {STEPS} \nSAVE_EVERY: {SAVE_EVERY} \nDEVICE: {DEVICE} \nDTYPE: {DTYPE}")
+print(
+    f"BATCH SIZE: {BATCH_SIZE} \nLR: {LR} \nSTEPS: {STEPS} \nSAVE_EVERY: {SAVE_EVERY} "
+    f"\nDEVICE: {DEVICE} \nDTYPE: {DTYPE} \nUSE_AMP: {USE_AMP} \nUSE_SCALER: {USE_SCALER}"
+)
 
 # -------------------------
 # 3. Load Models
@@ -46,7 +51,7 @@ if prediction_type != "epsilon":
         "Set scheduler prediction_type to epsilon or change training target accordingly."
     )
 
-scaler = torch.cuda.amp.GradScaler(enabled=(DEVICE == "cuda" and DTYPE == torch.float16))
+scaler = torch.cuda.amp.GradScaler(enabled=USE_SCALER)
 
 # vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse", torch_dtype=torch.float16).to(DEVICE)
 # unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet", torch_dtype=torch.float16).to(DEVICE)
@@ -148,7 +153,7 @@ while step < STEPS:
             text_emb = text_emb.to(dtype=z_input.dtype)
         
         # forward pass
-        with torch.cuda.amp.autocast(enabled=(DEVICE == "cuda" and DTYPE == torch.float16)):
+        with torch.amp.autocast("cuda", enabled=USE_AMP):
             eps_pred = unet_lora(
                 z_input,
                 t,
@@ -161,7 +166,7 @@ while step < STEPS:
                 print(f"[step {step}] loss = {loss.item():.6f}")
             
         optimizer.zero_grad(set_to_none=True)
-        if DEVICE == "cuda":
+        if USE_SCALER:
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
