@@ -127,8 +127,8 @@ while step < STEPS:
         if step >= STEPS:
             break
 
-        src_imgs = src_imgs.to(DEVICE)
-        tgt_imgs = tgt_imgs.to(DEVICE)
+        src_imgs = src_imgs.to(DEVICE, dtype=DTYPE)
+        tgt_imgs = tgt_imgs.to(DEVICE, dtype=DTYPE)
         instr_ids = instr_ids.to(DEVICE)
 
         # encode images
@@ -145,6 +145,7 @@ while step < STEPS:
         # encode text
         with torch.no_grad():
             text_emb = clip.text_encoder(instr_ids)[0]
+            text_emb = text_emb.to(dtype=z_input.dtype)
         
         # forward pass
         with torch.cuda.amp.autocast(enabled=(DEVICE == "cuda" and DTYPE == torch.float16)):
