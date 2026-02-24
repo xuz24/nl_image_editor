@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=pico-output-download
-#SBATCH --partition=cpu
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=06:00:00
 #SBATCH --output=logs/pico-output-download-%j.out
 #SBATCH --error=logs/pico-output-download-%j.err
+#SBATCH --account=eecs476w26s_class
 
 set -Eeuo pipefail
 
@@ -54,3 +54,5 @@ echo "Running: ${CMD[*]}"
 "${CMD[@]}"
 
 echo "Job completed successfully."
+
+# sbatch --export=ALL,JSONL_PATH="/scratch/.../pico-banana/sft.jsonl",OUTPUT_ROOT="/scratch/.../pico-banana",WORKERS=32 slurm/download_output_images.slurm

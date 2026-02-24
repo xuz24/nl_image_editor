@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --time=03:00:00
+#SBATCH --time=05:00:00
 #SBATCH --output=logs/pico-banana-test-%j.out
 #SBATCH --error=logs/pico-banana-test-%j.err
 #SBATCH --account=eecs476w26s_class
@@ -56,10 +56,12 @@ trap cleanup_cfg EXIT
 cat <<'EOF' > "$TRAIN_CFG"
 resolution: 256
 batch_size: 1
-learning_rate: 1e-4
+learning_rate: 1e-5
 lora_rank: 4
-num_training_steps: 50000
-save_every: 10000
+num_training_steps: 500000
+save_every: 100000
+dataset_jsonl: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana/sft_with_local_source_image_path.jsonl
+dataset_output_root: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana
 EOF
 
 # Run the shortened training loop.
