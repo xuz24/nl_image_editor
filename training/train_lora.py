@@ -11,6 +11,12 @@ import os
 import yaml
 from tqdm import tqdm
 from contextlib import nullcontext
+from collections import deque
+from pathlib import Path
+import sys
+
+from PIL import Image
+from torchvision import transforms
 
 
 # -------------------------
@@ -23,6 +29,8 @@ BATCH_SIZE = int(config["batch_size"])
 LR = float(config["learning_rate"])
 STEPS = int(config["num_training_steps"])
 SAVE_EVERY = int(config["save_every"])
+LOG_EVERY = int(config.get("log_every", 50))
+LOSS_WINDOW = int(config.get("loss_window", 100))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # Keep trainable params in fp32 for optimizer stability.
 DTYPE = torch.float32
@@ -46,6 +54,7 @@ unet = UnetLora(torch_dtype=DTYPE, in_channels=UNET_IN_CHANNELS).to(DEVICE)
 clip = CLIPEncoder().to(DEVICE)
 
 scheduler = Scheduler()
+val_scheduler = Scheduler().scheduler
 prediction_type = scheduler.scheduler.config.prediction_type
 print(f"Scheduler prediction_type: {prediction_type}")
 if prediction_type != "epsilon":
@@ -126,12 +135,77 @@ loader = DataLoader(
     pin_memory=(DEVICE == "cuda"),
 )
 
+
+def save_tensor_as_image(tensor: torch.Tensor, path: Path) -> None:
+    tensor = tensor.clamp(-1, 1)
+    tensor = (tensor + 1) / 2
+    image = tensor.mul(255).byte().permute(0, 2, 3, 1)[0].cpu().numpy()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(image).save(path)
+
+
+def run_validation(step: int) -> None:
+    source_path = config.get("val_source_image")
+    instruction = config.get("val_instruction")
+    if not source_path or not instruction:
+        return
+
+    val_steps = int(config.get("val_steps", 30))
+    val_seed = int(config.get("val_seed", 42))
+    val_output_dir = Path(config.get("val_output_dir", "validation_outputs"))
+    resolution = int(config["resolution"])
+
+    preprocess = transforms.Compose(
+        [
+            transforms.Resize((resolution, resolution)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+        ]
+    )
+
+    src = Image.open(source_path).convert("RGB")
+    src_tensor = preprocess(src).unsqueeze(0).to(DEVICE, dtype=DTYPE)
+
+    generator = torch.Generator(device=DEVICE).manual_seed(val_seed)
+
+    was_training = unet_lora.training
+    unet_lora.eval()
+    with torch.no_grad():
+        z_src = vae.encode(src_tensor).latent_dist.sample() * 0.18215
+        z = torch.randn(z_src.shape, device=DEVICE, dtype=DTYPE, generator=generator)
+
+        tok = clip.tokenizer(
+            instruction,
+            padding="max_length",
+            truncation=True,
+            max_length=77,
+            return_tensors="pt",
+        )
+        text_emb = clip.text_encoder(tok.input_ids.to(DEVICE))[0].to(dtype=DTYPE)
+
+        val_scheduler.set_timesteps(val_steps)
+        amp_ctx = torch.amp.autocast("cuda", dtype=AMP_DTYPE) if USE_AMP else nullcontext()
+        for ts in val_scheduler.timesteps:
+            z_input = torch.cat([z, z_src], dim=1)
+            with amp_ctx:
+                noise_pred = unet_lora(z_input, ts, encoder_hidden_states=text_emb).sample
+            z = val_scheduler.step(noise_pred, ts, z).prev_sample
+
+        edited = vae.decode(z / 0.18215).sample
+        out_path = val_output_dir / f"val_step_{step}.png"
+        save_tensor_as_image(edited, out_path)
+        print(f"[val] saved: {out_path}")
+
+    if was_training:
+        unet_lora.train()
+
 # -------------------------
 # 6. Training Loop
 # -------------------------
 step = 0
+loss_history = deque(maxlen=LOSS_WINDOW)
 while step < STEPS:
-    for src_imgs, tgt_imgs, instr_ids in tqdm(loader):
+    for src_imgs, tgt_imgs, instr_ids in tqdm(loader, file=sys.stdout):
         if step >= STEPS:
             break
 
@@ -165,9 +239,11 @@ while step < STEPS:
             ).sample
 
             loss = torch.nn.functional.mse_loss(eps_pred, noise)
-            
-            if step % SAVE_EVERY == 0:
-                print(f"[step {step}] loss = {loss.item():.6f}")
+            loss_history.append(loss.item())
+
+            if step % LOG_EVERY == 0:
+                avg_loss = sum(loss_history) / len(loss_history)
+                print(f"[step {step}] loss = {loss.item():.6f} | loss_ma{LOSS_WINDOW} = {avg_loss:.6f}")
             
         optimizer.zero_grad(set_to_none=True)
         if not torch.isfinite(loss):
@@ -191,3 +267,4 @@ while step < STEPS:
             os.makedirs("checkpoints", exist_ok=True)
             torch.save(unet_lora.state_dict(), ckpt_path)
             print(f"Saved checkpoint: {ckpt_path}")
+            run_validation(step)

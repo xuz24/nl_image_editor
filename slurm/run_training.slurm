@@ -28,6 +28,7 @@ export HF_HOME="$REPO_DIR/.cache/huggingface"
 export HF_TOKEN="${HF_TOKEN:-}"
 export WANDB_MODE=offline
 export PYTORCH_ENABLE_MPS_FALLBACK=1
+export PYTHONUNBUFFERED=1
 
 # Create/activate the venv if it doesn't exist on the compute node yet.
 if [[ ! -d ".venv" ]]; then
@@ -53,16 +54,38 @@ cleanup_cfg() {
 }
 trap cleanup_cfg EXIT
 
-cat <<'EOF' > "$TRAIN_CFG"
+# Configurable overrides for submit-time tuning.
+DATASET_JSONL="${DATASET_JSONL:-/scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana/sft_with_local_source_image_path.jsonl}"
+DATASET_OUTPUT_ROOT="${DATASET_OUTPUT_ROOT:-/scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana}"
+TRAIN_STEPS="${TRAIN_STEPS:-500000}"
+SAVE_EVERY="${SAVE_EVERY:-100000}"
+LOG_EVERY="${LOG_EVERY:-100}"
+LOSS_WINDOW="${LOSS_WINDOW:-200}"
+
+# Optional fixed validation sample at checkpoint boundaries.
+VAL_SOURCE_IMAGE="${VAL_SOURCE_IMAGE:-}"
+VAL_INSTRUCTION="${VAL_INSTRUCTION:-}"
+VAL_STEPS="${VAL_STEPS:-30}"
+VAL_SEED="${VAL_SEED:-42}"
+VAL_OUTPUT_DIR="${VAL_OUTPUT_DIR:-validation_outputs}"
+
+cat <<EOF > "$TRAIN_CFG"
 resolution: 256
 batch_size: 1
 learning_rate: 1e-5
 lora_rank: 4
-num_training_steps: 500000
-save_every: 100000
-dataset_jsonl: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana/sft_with_local_source_image_path.jsonl
-dataset_output_root: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana
+num_training_steps: ${TRAIN_STEPS}
+save_every: ${SAVE_EVERY}
+log_every: ${LOG_EVERY}
+loss_window: ${LOSS_WINDOW}
+dataset_jsonl: ${DATASET_JSONL}
+dataset_output_root: ${DATASET_OUTPUT_ROOT}
+val_source_image: ${VAL_SOURCE_IMAGE}
+val_instruction: "${VAL_INSTRUCTION}"
+val_steps: ${VAL_STEPS}
+val_seed: ${VAL_SEED}
+val_output_dir: ${VAL_OUTPUT_DIR}
 EOF
 
 # Run the shortened training loop.
-python training/train_lora.py
+python -u training/train_lora.py
