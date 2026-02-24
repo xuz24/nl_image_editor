@@ -23,7 +23,8 @@ LR = float(config["learning_rate"])
 STEPS = int(config["num_training_steps"])
 SAVE_EVERY = int(config["save_every"])
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DTYPE = torch.float32
+# Use mixed precision on CUDA by default; keep fp32 on CPU.
+DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
 UNET_IN_CHANNELS = 8  # concat(z_noisy, z_src)
 
 print(f"BATCH SIZE: {BATCH_SIZE} \nLR: {LR} \nSTEPS: {STEPS} \nSAVE_EVERY: {SAVE_EVERY} \nDEVICE: {DEVICE} \nDTYPE: {DTYPE}")
@@ -37,8 +38,15 @@ unet = UnetLora(torch_dtype=DTYPE, in_channels=UNET_IN_CHANNELS).to(DEVICE)
 clip = CLIPEncoder().to(DEVICE)
 
 scheduler = Scheduler()
+prediction_type = scheduler.scheduler.config.prediction_type
+print(f"Scheduler prediction_type: {prediction_type}")
+if prediction_type != "epsilon":
+    raise RuntimeError(
+        f"Training loss currently targets epsilon noise, but scheduler prediction_type={prediction_type}. "
+        "Set scheduler prediction_type to epsilon or change training target accordingly."
+    )
 
-scaler = torch.cuda.amp.GradScaler()
+scaler = torch.cuda.amp.GradScaler(enabled=(DEVICE == "cuda" and DTYPE == torch.float16))
 
 # vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse", torch_dtype=torch.float16).to(DEVICE)
 # unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet", torch_dtype=torch.float16).to(DEVICE)
@@ -61,6 +69,9 @@ unet_lora = unet.get_model(lora_config)
 # Freeze everything else
 vae.autoencoder.requires_grad_(False)
 clip.text_encoder.requires_grad_(False)
+vae.autoencoder.eval()
+clip.text_encoder.eval()
+unet_lora.train()
 
 # Keep 8-channel conditioning: conv_in is randomly initialized due channel mismatch,
 # so it must be trainable or the model cannot learn to use concatenated latents.
@@ -72,12 +83,19 @@ optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, unet_lora.parame
 total_params = sum(p.numel() for p in unet_lora.parameters())
 trainable_params = sum(p.numel() for p in unet_lora.parameters() if p.requires_grad)
 trainable_names = [name for name, p in unet_lora.named_parameters() if p.requires_grad]
+lora_trainable = [name for name in trainable_names if "lora_" in name]
 print(
     f"UNet params: total={total_params:,} trainable={trainable_params:,} "
     f"({100.0 * trainable_params / total_params:.4f}%)"
 )
 print(f"conv_in trainable: {unet_lora.model.conv_in.weight.requires_grad}")
 print(f"Sample trainable tensors: {trainable_names[:12]}")
+print(f"Trainable LoRA tensors: {len(lora_trainable)}")
+if len(lora_trainable) == 0:
+    raise RuntimeError(
+        "No trainable LoRA tensors found. Check lora_target_modules names in config "
+        "(expected matches like to_q/to_k/to_v/to_out.0)."
+    )
 
 # -------------------------
 # 5. Prepare DataLoader
@@ -89,7 +107,13 @@ dataset = PicoBananaDataset(
     jsonl_path=config.get("dataset_jsonl"),
     output_root=config.get("dataset_output_root"),
 )
-loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+loader = DataLoader(
+    dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=4,
+    pin_memory=(DEVICE == "cuda"),
+)
 
 # -------------------------
 # 6. Training Loop
@@ -120,7 +144,7 @@ while step < STEPS:
             text_emb = clip.text_encoder(instr_ids)[0]
         
         # forward pass
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.cuda.amp.autocast(enabled=(DEVICE == "cuda" and DTYPE == torch.float16)):
             eps_pred = unet_lora(
                 z_input,
                 t,
@@ -132,7 +156,7 @@ while step < STEPS:
             if step % SAVE_EVERY == 0:
                 print(f"[step {step}] loss = {loss.item():.6f}")
             
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         if DEVICE == "cuda":
             scaler.scale(loss).backward()
             scaler.step(optimizer)
