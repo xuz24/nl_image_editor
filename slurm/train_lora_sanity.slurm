@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --time=00:30:00
+#SBATCH --time=01:00:00
 #SBATCH --output=logs/pico-banana-test-%j.out
 #SBATCH --error=logs/pico-banana-test-%j.err
 #SBATCH --account=eecs476w26s_class
@@ -54,14 +54,25 @@ cleanup_cfg() {
 trap cleanup_cfg EXIT
 
 # Keep the sanity check tiny so it fits in 30 minutes on a single GPU.
+# cat <<'EOF' > "$TRAIN_CFG"
+# resolution: 256
+# batch_size: 1
+# learning_rate: 1e-4
+# lora_rank: 4
+# num_training_steps: 5000
+# save_every: 1000
+# dataset_jsonl: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana/sft_with_local_source_image_path.jsonl
+# dataset_output_root: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana
+# EOF
+
 cat <<'EOF' > "$TRAIN_CFG"
 resolution: 256
 batch_size: 1
 learning_rate: 1e-4
 lora_rank: 4
-num_training_steps: 100
-save_every: 50
-dataset_jsonl: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana/sft_with_local_source_image_path.jsonl
+num_training_steps: 5000
+save_every: 1000
+dataset_jsonl: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana/overfit.jsonl
 dataset_output_root: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana
 EOF
 
