@@ -3,7 +3,7 @@ from models.clip_encoder import CLIPEncoder
 from models.unet_lora import UnetLora
 from diffusion.scheduler import Scheduler
 from data.loaders import PicoBananaDataset
-from training.utils import *
+from training.utils import run_validation
 
 import torch
 from torch.utils.data import DataLoader
@@ -13,11 +13,7 @@ import yaml
 from tqdm import tqdm
 from contextlib import nullcontext
 from collections import deque
-from pathlib import Path
 import sys
-
-from PIL import Image
-from torchvision import transforms
 
 
 # -------------------------
@@ -34,9 +30,8 @@ LOG_EVERY = int(config.get("log_every", 50))
 LOSS_WINDOW = int(config.get("loss_window", 100))
 RESUME_CHECKPOINT = config.get("resume_checkpoint", False)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-# Keep trainable params in fp32 for optimizer stability.
 DTYPE = torch.float32
-UNET_IN_CHANNELS = 8  # concat(z_noisy, z_src)
+UNET_IN_CHANNELS = 8
 USE_AMP = DEVICE == "cuda"
 AMP_DTYPE = torch.bfloat16 if (DEVICE == "cuda" and torch.cuda.is_bf16_supported()) else torch.float16
 USE_SCALER = DEVICE == "cuda" and AMP_DTYPE == torch.float16
@@ -59,6 +54,11 @@ scheduler = Scheduler()
 val_scheduler = Scheduler().scheduler
 prediction_type = scheduler.scheduler.config.prediction_type
 scaler = torch.cuda.amp.GradScaler(enabled=USE_SCALER)
+if prediction_type != "epsilon":
+    raise RuntimeError(
+        f"Training loss currently targets epsilon noise, but scheduler prediction_type={prediction_type}. "
+        "Set scheduler prediction_type to epsilon or change training target accordingly."
+    )
 
 # -------------------------
 # 4. LoRA Injection
@@ -88,8 +88,10 @@ unet_lora.model.conv_in.requires_grad_(True)
 optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, unet_lora.parameters()), lr=LR)
 
 if RESUME_CHECKPOINT:
-    state = torch.load(RESUME_CHECKPOINT)
-    optimizer.load_state_dict(state["optimizer"])
+    if "optimizer" in state:
+        optimizer.load_state_dict(state["optimizer"])
+    if "scheduler" in state and state["scheduler"] is not None:
+        scheduler.scheduler.load_state_dict(state["scheduler"])
 
 # Sanity-check trainable params: ensure conv_in + LoRA adapters are trainable.
 total_params = sum(p.numel() for p in unet_lora.parameters())
@@ -127,14 +129,13 @@ loader = DataLoader(
     pin_memory=(DEVICE == "cuda"),
 )
 
-
 # -------------------------
 # 6. Training Loop
 # -------------------------
 step = 0
 
 if RESUME_CHECKPOINT:
-    step = int(RESUME_CHECKPOINT[10:-2])
+    step = int(state.get("step", 0))
 
 loss_history = deque(maxlen=LOSS_WINDOW)
 use_amp_runtime = USE_AMP
@@ -142,7 +143,8 @@ while step < STEPS:
     for src_imgs, tgt_imgs, instr_ids in tqdm(loader, file=sys.stdout):
         if step >= STEPS:
             break
-
+        
+        # move to device
         src_imgs = src_imgs.to(DEVICE, dtype=DTYPE)
         tgt_imgs = tgt_imgs.to(DEVICE, dtype=DTYPE)
         instr_ids = instr_ids.to(DEVICE)
@@ -175,6 +177,7 @@ while step < STEPS:
             loss = torch.nn.functional.mse_loss(eps_pred, noise)
             
         optimizer.zero_grad(set_to_none=True)
+        # check loss is finite
         if not torch.isfinite(loss):
             print(
                 f"[warn] non-finite loss at step {step} "
@@ -204,6 +207,7 @@ while step < STEPS:
                 raise RuntimeError(f"Non-finite loss at step {step}: {loss.item()}")
 
         loss_history.append(loss.item())
+        
         if step % LOG_EVERY == 0:
             avg_loss = sum(loss_history) / len(loss_history)
             print(f"[step {step}] loss = {loss.item():.6f} | loss_ma{LOSS_WINDOW} = {avg_loss:.6f}")
@@ -228,10 +232,21 @@ while step < STEPS:
             checkpoint = {
                 "model": unet_lora.state_dict(),
                 "optimizer": optimizer.state_dict(),  # save optimizer state
-                "scheduler": scheduler.state_dict() if scheduler else None,  # save scheduler if used
+                "scheduler": scheduler.scheduler.state_dict() if scheduler else None,  # save scheduler state
                 "step": step
             }
             
             torch.save(checkpoint, ckpt_path)
             print(f"Saved checkpoint: {ckpt_path}")
-            run_validation(step)
+            run_validation(
+                step=step,
+                config=config,
+                device=DEVICE,
+                dtype=DTYPE,
+                vae=vae,
+                clip=clip,
+                unet_lora=unet_lora,
+                val_scheduler=val_scheduler,
+                use_amp_runtime=use_amp_runtime,
+                amp_dtype=AMP_DTYPE,
+            )
