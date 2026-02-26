@@ -21,3 +21,5 @@ data/pico-banana/
 *.swp
 
 outputs/
+
+validation_outputs/

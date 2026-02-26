@@ -3,6 +3,7 @@ from models.clip_encoder import CLIPEncoder
 from models.unet_lora import UnetLora
 from diffusion.scheduler import Scheduler
 from data.loaders import PicoBananaDataset
+from training.utils import *
 
 import torch
 from torch.utils.data import DataLoader
@@ -31,6 +32,7 @@ STEPS = int(config["num_training_steps"])
 SAVE_EVERY = int(config["save_every"])
 LOG_EVERY = int(config.get("log_every", 50))
 LOSS_WINDOW = int(config.get("loss_window", 100))
+RESUME_CHECKPOINT = config.get("resume_checkpoint", False)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # Keep trainable params in fp32 for optimizer stability.
 DTYPE = torch.float32
@@ -56,20 +58,7 @@ clip = CLIPEncoder().to(DEVICE)
 scheduler = Scheduler()
 val_scheduler = Scheduler().scheduler
 prediction_type = scheduler.scheduler.config.prediction_type
-print(f"Scheduler prediction_type: {prediction_type}")
-if prediction_type != "epsilon":
-    raise RuntimeError(
-        f"Training loss currently targets epsilon noise, but scheduler prediction_type={prediction_type}. "
-        "Set scheduler prediction_type to epsilon or change training target accordingly."
-    )
-
 scaler = torch.cuda.amp.GradScaler(enabled=USE_SCALER)
-
-# vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse", torch_dtype=torch.float16).to(DEVICE)
-# unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet", torch_dtype=torch.float16).to(DEVICE)
-# text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").to(DEVICE)
-# tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-# scheduler = DDIMScheduler.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="scheduler")
 
 # -------------------------
 # 4. LoRA Injection
@@ -81,23 +70,26 @@ lora_config = LoraConfig(
     lora_dropout=config.get("lora_dropout", 0.05),
     bias="none",
 )
+
 unet_lora = unet.get_model(lora_config)
 
-# state = torch.load("/home/xuzijie/nl_image_editor/checkpoints/lora_step_100000.pt", map_location=DEVICE)
-# unet_lora.load_state_dict(state, strict=False)
+if RESUME_CHECKPOINT:
+    state = torch.load(RESUME_CHECKPOINT, map_location=DEVICE)
+    unet_lora.load_state_dict(state["model"], strict=False)
 
-# Freeze everything else
 vae.autoencoder.requires_grad_(False)
 clip.text_encoder.requires_grad_(False)
 vae.autoencoder.eval()
 clip.text_encoder.eval()
 unet_lora.train()
 
-# Keep 8-channel conditioning: conv_in is randomly initialized due channel mismatch,
-# so it must be trainable or the model cannot learn to use concatenated latents.
 unet_lora.model.conv_in.requires_grad_(True)
 
 optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, unet_lora.parameters()), lr=LR)
+
+if RESUME_CHECKPOINT:
+    state = torch.load(RESUME_CHECKPOINT)
+    optimizer.load_state_dict(state["optimizer"])
 
 # Sanity-check trainable params: ensure conv_in + LoRA adapters are trainable.
 total_params = sum(p.numel() for p in unet_lora.parameters())
@@ -136,73 +128,14 @@ loader = DataLoader(
 )
 
 
-def save_tensor_as_image(tensor: torch.Tensor, path: Path) -> None:
-    tensor = tensor.clamp(-1, 1)
-    tensor = (tensor + 1) / 2
-    image = tensor.mul(255).byte().permute(0, 2, 3, 1)[0].cpu().numpy()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(image).save(path)
-
-
-def run_validation(step: int) -> None:
-    source_path = config.get("val_source_image")
-    instruction = config.get("val_instruction")
-    if not source_path or not instruction:
-        return
-
-    val_steps = int(config.get("val_steps", 30))
-    val_seed = int(config.get("val_seed", 42))
-    val_output_dir = Path(config.get("val_output_dir", "validation_outputs"))
-    resolution = int(config["resolution"])
-
-    preprocess = transforms.Compose(
-        [
-            transforms.Resize((resolution, resolution)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
-        ]
-    )
-
-    src = Image.open(source_path).convert("RGB")
-    src_tensor = preprocess(src).unsqueeze(0).to(DEVICE, dtype=DTYPE)
-
-    generator = torch.Generator(device=DEVICE).manual_seed(val_seed)
-
-    was_training = unet_lora.training
-    unet_lora.eval()
-    with torch.no_grad():
-        z_src = vae.encode(src_tensor).latent_dist.sample() * 0.18215
-        z = torch.randn(z_src.shape, device=DEVICE, dtype=DTYPE, generator=generator)
-
-        tok = clip.tokenizer(
-            instruction,
-            padding="max_length",
-            truncation=True,
-            max_length=77,
-            return_tensors="pt",
-        )
-        text_emb = clip.text_encoder(tok.input_ids.to(DEVICE))[0].to(dtype=DTYPE)
-
-        val_scheduler.set_timesteps(val_steps)
-        amp_ctx = torch.amp.autocast("cuda", dtype=AMP_DTYPE) if use_amp_runtime else nullcontext()
-        for ts in val_scheduler.timesteps:
-            z_input = torch.cat([z, z_src], dim=1)
-            with amp_ctx:
-                noise_pred = unet_lora(z_input, ts, encoder_hidden_states=text_emb).sample
-            z = val_scheduler.step(noise_pred, ts, z).prev_sample
-
-        edited = vae.decode(z / 0.18215).sample
-        out_path = val_output_dir / f"val_step_{step}.png"
-        save_tensor_as_image(edited, out_path)
-        print(f"[val] saved: {out_path}")
-
-    if was_training:
-        unet_lora.train()
-
 # -------------------------
 # 6. Training Loop
 # -------------------------
 step = 0
+
+if RESUME_CHECKPOINT:
+    step = int(RESUME_CHECKPOINT[10:-2])
+
 loss_history = deque(maxlen=LOSS_WINDOW)
 use_amp_runtime = USE_AMP
 while step < STEPS:
@@ -291,6 +224,14 @@ while step < STEPS:
         if step % SAVE_EVERY == 0:
             ckpt_path = f"checkpoints/lora_step_{step}.pt"
             os.makedirs("checkpoints", exist_ok=True)
-            torch.save(unet_lora.state_dict(), ckpt_path)
+            
+            checkpoint = {
+                "model": unet_lora.state_dict(),
+                "optimizer": optimizer.state_dict(),  # save optimizer state
+                "scheduler": scheduler.state_dict() if scheduler else None,  # save scheduler if used
+                "step": step
+            }
+            
+            torch.save(checkpoint, ckpt_path)
             print(f"Saved checkpoint: {ckpt_path}")
             run_validation(step)

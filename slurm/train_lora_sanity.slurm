@@ -70,8 +70,8 @@ resolution: 256
 batch_size: 1
 learning_rate: 1e-4
 lora_rank: 4
-num_training_steps: 5000
-save_every: 1000
+num_training_steps: 100
+save_every: 50
 dataset_jsonl: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana/overfit.jsonl
 dataset_output_root: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana
 EOF
