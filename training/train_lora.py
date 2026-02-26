@@ -90,8 +90,6 @@ optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, unet_lora.parame
 if RESUME_CHECKPOINT:
     if "optimizer" in state:
         optimizer.load_state_dict(state["optimizer"])
-    if "scheduler" in state and state["scheduler"] is not None:
-        scheduler.scheduler.load_state_dict(state["scheduler"])
 
 # Sanity-check trainable params: ensure conv_in + LoRA adapters are trainable.
 total_params = sum(p.numel() for p in unet_lora.parameters())
@@ -232,7 +230,6 @@ while step < STEPS:
             checkpoint = {
                 "model": unet_lora.state_dict(),
                 "optimizer": optimizer.state_dict(),  # save optimizer state
-                "scheduler": scheduler.scheduler.state_dict() if scheduler else None,  # save scheduler state
                 "step": step
             }
             
