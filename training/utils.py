@@ -36,6 +36,8 @@ def run_validation(
 
     val_steps = int(config.get("val_steps", 30))
     val_seed = int(config.get("val_seed", 42))
+    val_text_guidance_scale = float(config.get("val_text_guidance_scale", 7.5))
+    val_image_guidance_scale = float(config.get("val_image_guidance_scale", 1.5))
     val_output_dir = Path(config.get("val_output_dir", "validation_outputs"))
     resolution = int(config["resolution"])
 
@@ -65,13 +67,31 @@ def run_validation(
             return_tensors="pt",
         )
         text_emb = clip.text_encoder(tok.input_ids.to(device))[0].to(dtype=dtype)
+        null_tok = clip.tokenizer(
+            [""],
+            padding="max_length",
+            truncation=True,
+            max_length=77,
+            return_tensors="pt",
+        )
+        null_text_emb = clip.text_encoder(null_tok.input_ids.to(device))[0].to(dtype=dtype)
+        z_src_zeros = torch.zeros_like(z_src)
 
         val_scheduler.set_timesteps(val_steps)
         amp_ctx = torch.amp.autocast("cuda", dtype=amp_dtype) if use_amp_runtime else nullcontext()
         for ts in val_scheduler.timesteps:
-            z_input = torch.cat([z, z_src], dim=1)
+            z_model = torch.cat([z, z, z], dim=0)
+            z_src_model = torch.cat([z_src, z_src, z_src_zeros], dim=0)
+            z_input = torch.cat([z_model, z_src_model], dim=1)
             with amp_ctx:
-                noise_pred = unet_lora(z_input, ts, encoder_hidden_states=text_emb).sample
+                emb_model = torch.cat([text_emb, null_text_emb, null_text_emb], dim=0)
+                noise_pred_all = unet_lora(z_input, ts, encoder_hidden_states=emb_model).sample
+                noise_pred_text, noise_pred_image, noise_pred_uncond = noise_pred_all.chunk(3, dim=0)
+                noise_pred = (
+                    noise_pred_uncond
+                    + val_image_guidance_scale * (noise_pred_image - noise_pred_uncond)
+                    + val_text_guidance_scale * (noise_pred_text - noise_pred_image)
+                )
             z = val_scheduler.step(noise_pred, ts, z).prev_sample
 
         edited = vae.decode(z / 0.18215).sample

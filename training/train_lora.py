@@ -29,6 +29,9 @@ SAVE_EVERY = int(config["save_every"])
 LOG_EVERY = int(config.get("log_every", 50))
 LOSS_WINDOW = int(config.get("loss_window", 100))
 RESUME_CHECKPOINT = config.get("resume_checkpoint", False)
+TEXT_DROPOUT_PROB = float(config.get("text_condition_dropout_prob", 0.1))
+IMAGE_DROPOUT_PROB = float(config.get("image_condition_dropout_prob", 0.1))
+BOTH_DROPOUT_PROB = float(config.get("both_condition_dropout_prob", 0.05))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.float32
 UNET_IN_CHANNELS = 8
@@ -40,6 +43,8 @@ print(
     f"BATCH SIZE: {BATCH_SIZE} \nLR: {LR} \nSTEPS: {STEPS} \nSAVE_EVERY: {SAVE_EVERY} "
     f"\nDEVICE: {DEVICE} \nDTYPE: {DTYPE} \nUSE_AMP: {USE_AMP} "
     f"\nAMP_DTYPE: {AMP_DTYPE if USE_AMP else 'n/a'} \nUSE_SCALER: {USE_SCALER}"
+    f"\nTEXT_DROPOUT_PROB: {TEXT_DROPOUT_PROB} \nIMAGE_DROPOUT_PROB: {IMAGE_DROPOUT_PROB} "
+    f"\nBOTH_DROPOUT_PROB: {BOTH_DROPOUT_PROB}"
 )
 
 # -------------------------
@@ -91,6 +96,21 @@ optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, unet_lora.parame
 if RESUME_CHECKPOINT:
     if "optimizer" in state:
         optimizer.load_state_dict(state["optimizer"])
+
+if TEXT_DROPOUT_PROB < 0 or IMAGE_DROPOUT_PROB < 0 or BOTH_DROPOUT_PROB < 0:
+    raise ValueError("Dropout probabilities must be >= 0.")
+if TEXT_DROPOUT_PROB + IMAGE_DROPOUT_PROB + BOTH_DROPOUT_PROB > 1.0:
+    raise ValueError("Dropout probabilities must sum to <= 1.")
+
+with torch.no_grad():
+    null_prompt_ids = clip.tokenizer(
+        [""],
+        padding="max_length",
+        truncation=True,
+        max_length=77,
+        return_tensors="pt",
+    ).input_ids.to(DEVICE)
+    null_text_emb = clip.text_encoder(null_prompt_ids)[0].to(dtype=DTYPE)
 
 # Sanity-check trainable params: ensure conv_in + LoRA adapters are trainable.
 total_params = sum(p.numel() for p in unet_lora.parameters())
@@ -164,6 +184,28 @@ while step < STEPS:
         with torch.no_grad():
             text_emb = clip.text_encoder(instr_ids)[0]
             text_emb = text_emb.to(dtype=z_input.dtype)
+
+        # InstructPix2Pix-style conditioning dropout for CFG training.
+        if TEXT_DROPOUT_PROB > 0 or IMAGE_DROPOUT_PROB > 0 or BOTH_DROPOUT_PROB > 0:
+            batch_size = z_src.shape[0]
+            drop_choice = torch.rand(batch_size, device=DEVICE)
+            both_mask = drop_choice < BOTH_DROPOUT_PROB
+            text_mask = (drop_choice >= BOTH_DROPOUT_PROB) & (
+                drop_choice < BOTH_DROPOUT_PROB + TEXT_DROPOUT_PROB
+            )
+            image_mask = (drop_choice >= BOTH_DROPOUT_PROB + TEXT_DROPOUT_PROB) & (
+                drop_choice < BOTH_DROPOUT_PROB + TEXT_DROPOUT_PROB + IMAGE_DROPOUT_PROB
+            )
+            drop_text_mask = both_mask | text_mask
+            drop_image_mask = both_mask | image_mask
+
+            if drop_text_mask.any():
+                text_emb = text_emb.clone()
+                text_emb[drop_text_mask] = null_text_emb[0].to(dtype=text_emb.dtype)
+            if drop_image_mask.any():
+                z_src = z_src.clone()
+                z_src[drop_image_mask] = 0.0
+            z_input = torch.cat([z_noisy, z_src], dim=1)
         
         # forward pass
         amp_ctx = torch.amp.autocast("cuda", dtype=AMP_DTYPE) if use_amp_runtime else nullcontext()

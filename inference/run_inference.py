@@ -48,7 +48,7 @@ def preprocess_image(path: Path, resolution: int, device: torch.device) -> torch
         [
             transforms.Resize((resolution, resolution)),
             transforms.ToTensor(),
-            transforms.Normalize([0.5], [0.5]),
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
         ]
     )
     img = Image.open(path).convert("RGB")
@@ -71,6 +71,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default="outputs/edited.png", help="Where to save the edited image.")
     parser.add_argument("--steps", type=int, default=50, help="Number of DDIM inference steps.")
     parser.add_argument("--seed", type=int, default=None, help="Optional random seed for reproducibility.")
+    parser.add_argument(
+        "--text-guidance-scale",
+        type=float,
+        default=7.5,
+        help="Classifier-free guidance scale for text instruction.",
+    )
+    parser.add_argument(
+        "--image-guidance-scale",
+        type=float,
+        default=1.5,
+        help="Classifier-free guidance scale for source image conditioning.",
+    )
     parser.add_argument("--config", default="configs/training_config.yaml", help="Training config file for resolution + LoRA parms.")
     return parser.parse_args()
 
@@ -113,15 +125,37 @@ def main() -> None:
         max_length=77,
         return_tensors="pt",
     )
-    text_ids = tokenized.input_ids.to(device)
-    text_emb = clip.text_encoder(text_ids)[0]
+    cond_text_ids = tokenized.input_ids.to(device)
+    uncond_text_ids = clip.tokenizer(
+        [""],
+        padding="max_length",
+        truncation=True,
+        max_length=77,
+        return_tensors="pt",
+    ).input_ids.to(device)
+    text_emb = clip.text_encoder(cond_text_ids)[0]
+    uncond_text_emb = clip.text_encoder(uncond_text_ids)[0]
+    z_src_zeros = torch.zeros_like(z_src)
 
     # DDIM sampling
     z = torch.randn_like(z_src)
     for timestep in scheduler.scheduler.timesteps:
         with torch.no_grad():
-            z_input = torch.cat([z, z_src], dim=1)
-            noise_pred = unet_lora(z_input, timestep, encoder_hidden_states=text_emb).sample
+            z_model = torch.cat([z, z, z], dim=0)
+            z_src_model = torch.cat([z_src, z_src, z_src_zeros], dim=0)
+            z_input = torch.cat([z_model, z_src_model], dim=1)
+
+            emb_model = torch.cat([text_emb, uncond_text_emb, uncond_text_emb], dim=0)
+            noise_pred_all = unet_lora(z_input, timestep, encoder_hidden_states=emb_model).sample
+            noise_pred_text, noise_pred_image, noise_pred_uncond = noise_pred_all.chunk(3, dim=0)
+
+            # InstructPix2Pix dual guidance:
+            # uncond + s_img*(img - uncond) + s_txt*(text - img)
+            noise_pred = (
+                noise_pred_uncond
+                + args.image_guidance_scale * (noise_pred_image - noise_pred_uncond)
+                + args.text_guidance_scale * (noise_pred_text - noise_pred_image)
+            )
             step_output = scheduler.scheduler.step(noise_pred, timestep, z)
             z = step_output.prev_sample
 
