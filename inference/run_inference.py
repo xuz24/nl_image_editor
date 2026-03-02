@@ -92,7 +92,7 @@ def main() -> None:
     lora_config = build_lora_config(cfg)
     unet_lora = unet.get_model(lora_config)
     state = torch.load(args.checkpoint, map_location=device)
-    unet_lora.load_state_dict(state, strict=False)
+    unet_lora.load_state_dict(state["model"], strict=False)
     unet_lora.eval()
 
     clip = CLIPEncoder().to(device)

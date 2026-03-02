@@ -76,6 +76,7 @@ unet_lora = unet.get_model(lora_config)
 if RESUME_CHECKPOINT:
     state = torch.load(RESUME_CHECKPOINT, map_location=DEVICE)
     unet_lora.load_state_dict(state["model"], strict=False)
+    print(f"Loading checkpoint from: {RESUME_CHECKPOINT}")
 
 vae.autoencoder.requires_grad_(False)
 clip.text_encoder.requires_grad_(False)
@@ -134,6 +135,7 @@ step = 0
 
 if RESUME_CHECKPOINT:
     step = int(state.get("step", 0))
+    print(f"Resuming from step: {step}")
 
 loss_history = deque(maxlen=LOSS_WINDOW)
 use_amp_runtime = USE_AMP

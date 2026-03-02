@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --time=05:00:00
+#SBATCH --time=8:00:00
 #SBATCH --output=logs/pico-banana-test-%j.out
 #SBATCH --error=logs/pico-banana-test-%j.err
 #SBATCH --account=eecs476w26s_class
@@ -57,8 +57,8 @@ trap cleanup_cfg EXIT
 # Configurable overrides for submit-time tuning.
 DATASET_JSONL="${DATASET_JSONL:-/scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana/sft_with_local_source_image_path.jsonl}"
 DATASET_OUTPUT_ROOT="${DATASET_OUTPUT_ROOT:-/scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana}"
-TRAIN_STEPS="${TRAIN_STEPS:-50000}"
-SAVE_EVERY="${SAVE_EVERY:-10000}"
+TRAIN_STEPS="${TRAIN_STEPS:-100000}"
+SAVE_EVERY="${SAVE_EVERY:-5000}"
 LOG_EVERY="${LOG_EVERY:-100}"
 LOSS_WINDOW="${LOSS_WINDOW:-200}"
 
@@ -85,7 +85,7 @@ val_instruction: "${VAL_INSTRUCTION}"
 val_steps: ${VAL_STEPS}
 val_seed: ${VAL_SEED}
 val_output_dir: ${VAL_OUTPUT_DIR}
-resume_checkpoint: /home/xuzijie/nl_image_editor/checkpoints/lora_step_10000.pt
+resume_checkpoint: /home/xuzijie/nl_image_editor/checkpoints/lora_step_50000.pt
 EOF
 
 # Run the shortened training loop.

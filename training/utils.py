@@ -81,3 +81,67 @@ def run_validation(
 
     if was_training:
         unet_lora.train()
+
+
+def run_inference(
+    *,
+    config: dict,
+    device: str,
+    dtype: torch.dtype,
+    vae,
+    clip,
+    unet_lora,
+    val_scheduler,
+    amp_dtype: torch.dtype,
+) -> None:
+    source_path = config.get("val_source_image")
+    instruction = config.get("val_instruction")
+    if not source_path or not instruction:
+        return
+
+    val_steps = int(config.get("val_steps", 30))
+    val_seed = int(config.get("val_seed", 42))
+    val_output_dir = Path(config.get("val_output_dir", "validation_outputs"))
+    resolution = int(config["resolution"])
+
+    preprocess = transforms.Compose(
+        [
+            transforms.Resize((resolution, resolution)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+        ]
+    )
+
+    src = Image.open(source_path).convert("RGB")
+    src_tensor = preprocess(src).unsqueeze(0).to(device, dtype=dtype)
+
+    generator = torch.Generator(device=device).manual_seed(val_seed)
+    was_training = unet_lora.training
+    unet_lora.eval()
+    with torch.no_grad():
+        z_src = vae.encode(src_tensor).latent_dist.sample() * 0.18215
+        z = torch.randn(z_src.shape, device=device, dtype=dtype, generator=generator)
+
+        tok = clip.tokenizer(
+            instruction,
+            padding="max_length",
+            truncation=True,
+            max_length=77,
+            return_tensors="pt",
+        )
+        text_emb = clip.text_encoder(tok.input_ids.to(device))[0].to(dtype=dtype)
+
+        val_scheduler.set_timesteps(val_steps)
+        for ts in val_scheduler.timesteps:
+            z_input = torch.cat([z, z_src], dim=1)
+            with amp_ctx:
+                noise_pred = unet_lora(z_input, ts, encoder_hidden_states=text_emb).sample
+            z = val_scheduler.step(noise_pred, ts, z).prev_sample
+
+        edited = vae.decode(z / 0.18215).sample
+        out_path = val_output_dir / f"inference_{val_source_image}.png"
+        save_tensor_as_image(edited, out_path)
+        print(f"[val] saved: {out_path}")
+
+    if was_training:
+        unet_lora.train()
