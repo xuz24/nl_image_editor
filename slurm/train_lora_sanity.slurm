@@ -1,18 +1,18 @@
 #!/bin/bash
-#SBATCH --job-name=pico-banana-test
+#SBATCH --job-name=pico-banana-train
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --time=01:00:00
+#SBATCH --time=3:00:00
 #SBATCH --output=logs/pico-banana-test-%j.out
 #SBATCH --error=logs/pico-banana-test-%j.err
 #SBATCH --account=eecs476w26s_class
 
 # Fail fast on errors/undefined vars inside the job
 set -Eeuo pipefail
-source ~/.bashrc
+
 REPO_DIR="$SLURM_SUBMIT_DIR"
 cd "$REPO_DIR"
 export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
@@ -25,9 +25,10 @@ module load python/3.10
 
 # Optionally point to a shared HF cache so repeated jobs reuse checkpoints.
 export HF_HOME="$REPO_DIR/.cache/huggingface"
-#export HF_TOKEN="${HF_TOKEN:-}"
+export HF_TOKEN="${HF_TOKEN:-}"
 export WANDB_MODE=offline
 export PYTORCH_ENABLE_MPS_FALLBACK=1
+export PYTHONUNBUFFERED=1
 
 # Create/activate the venv if it doesn't exist on the compute node yet.
 if [[ ! -d ".venv" ]]; then
@@ -53,28 +54,40 @@ cleanup_cfg() {
 }
 trap cleanup_cfg EXIT
 
-# Keep the sanity check tiny so it fits in 30 minutes on a single GPU.
-# cat <<'EOF' > "$TRAIN_CFG"
-# resolution: 256
-# batch_size: 1
-# learning_rate: 1e-4
-# lora_rank: 4
-# num_training_steps: 5000
-# save_every: 1000
-# dataset_jsonl: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana/sft_with_local_source_image_path.jsonl
-# dataset_output_root: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana
-# EOF
+# Configurable overrides for submit-time tuning.
+DATASET_JSONL="${DATASET_JSONL:-/scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana/sft_with_local_source_image_path.jsonl}"
+DATASET_OUTPUT_ROOT="${DATASET_OUTPUT_ROOT:-/scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana}"
+TRAIN_STEPS="${TRAIN_STEPS:-1010}"
+SAVE_EVERY="${SAVE_EVERY:-100}"
+LOG_EVERY="${LOG_EVERY:-1}"
+LOSS_WINDOW="${LOSS_WINDOW:-200}"
 
-cat <<'EOF' > "$TRAIN_CFG"
+# Optional fixed validation sample at checkpoint boundaries.
+VAL_SOURCE_IMAGE="${VAL_SOURCE_IMAGE:-/home/xuzijie/nl_image_editor/data/2218587291_f29ffd0401_z.jpg}"
+VAL_INSTRUCTION="${VAL_INSTRUCTION:-"Remove the red stop sign and its pole. blend the background seamlessly , keeping the same lighting and structure of the image.".}"
+VAL_STEPS="${VAL_STEPS:-30}"
+VAL_SEED="${VAL_SEED:-42}"
+VAL_OUTPUT_DIR="${VAL_OUTPUT_DIR:-validation_outputs}"
+
+cat <<EOF > "$TRAIN_CFG"
 resolution: 256
-batch_size: 1
-learning_rate: 1e-4
+batch_size: 8
+grad_accum_steps: 8
+learning_rate: 1e-5
 lora_rank: 4
-num_training_steps: 100
-save_every: 50
-dataset_jsonl: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana/overfit.jsonl
-dataset_output_root: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana
+num_training_steps: ${TRAIN_STEPS}
+save_every: ${SAVE_EVERY}
+log_every: ${LOG_EVERY}
+loss_window: ${LOSS_WINDOW}
+dataset_jsonl: ${DATASET_JSONL}
+dataset_output_root: ${DATASET_OUTPUT_ROOT}
+val_source_image: ${VAL_SOURCE_IMAGE}
+val_instruction: "${VAL_INSTRUCTION}"
+val_steps: ${VAL_STEPS}
+val_seed: ${VAL_SEED}
+val_output_dir: ${VAL_OUTPUT_DIR}
+resume_checkpoint: /home/xuzijie/nl_image_editor/checkpoints/lora_step_1000.pt
 EOF
 
 # Run the shortened training loop.
-python training/train_lora.py
+python -u training/train_lora.py

@@ -6,7 +6,6 @@ from peft.tuners.lora import LoraModel
 
 
 class UnetLora:
-    """Loads the base UNet and applies LoRA adapters."""
 
     def __init__(
         self,

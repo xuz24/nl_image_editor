@@ -1,16 +1,17 @@
 resolution: 256
 batch_size: 8
-learning_rate: 3e-5
+grad_accum_steps: 8
+learning_rate: 1e-4
 lora_rank: 4
-num_training_steps: 100000
-save_every: 5000
+num_training_steps: 16000
+save_every: 1000
 log_every: 100
 loss_window: 200
 dataset_jsonl: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana/sft_with_local_source_image_path.jsonl
 dataset_output_root: /scratch/eecs476w26s_class_root/eecs476w26s_class/xuzijie/pico-banana
 val_source_image: /home/xuzijie/nl_image_editor/data/2218587291_f29ffd0401_z.jpg
-val_instruction: "Remove the stop sign to the left and fill it in naturally."
-val_steps: 30
+val_instruction: "Remove the stop sign"
+val_steps: 80
 val_seed: 42
 val_output_dir: validation_outputs
-resume_checkpoint: /home/xuzijie/nl_image_editor/checkpoints/lora_step_50000.pt
+resume_checkpoint: /home/xuzijie/nl_image_editor/checkpoints/lora_step_summary_12000.pt

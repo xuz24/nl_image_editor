@@ -4,6 +4,7 @@ from models.unet_lora import UnetLora
 from diffusion.scheduler import Scheduler
 from data.loaders import PicoBananaDataset
 from training.utils import run_validation
+from training.utils import set_seeds
 
 import torch
 from torch.utils.data import DataLoader
@@ -14,6 +15,7 @@ from tqdm import tqdm
 from contextlib import nullcontext
 from collections import deque
 import sys
+import random
 
 
 # -------------------------
@@ -21,25 +23,30 @@ import sys
 # -------------------------
 with open("configs/training_config.yaml") as f:
     config = yaml.safe_load(f)
+    
+set_seeds(42)
 
 BATCH_SIZE = int(config["batch_size"])
 LR = float(config["learning_rate"])
 STEPS = int(config["num_training_steps"])
+GRAD_ACCUM_STEPS = int(config["grad_accum_steps"])
 SAVE_EVERY = int(config["save_every"])
 LOG_EVERY = int(config.get("log_every", 50))
 LOSS_WINDOW = int(config.get("loss_window", 100))
 RESUME_CHECKPOINT = config.get("resume_checkpoint", False)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.float32
+COND_DROPOUT = 0.05
 UNET_IN_CHANNELS = 8
 USE_AMP = DEVICE == "cuda"
 AMP_DTYPE = torch.bfloat16 if (DEVICE == "cuda" and torch.cuda.is_bf16_supported()) else torch.float16
 USE_SCALER = DEVICE == "cuda" and AMP_DTYPE == torch.float16
-
 print(
     f"BATCH SIZE: {BATCH_SIZE} \nLR: {LR} \nSTEPS: {STEPS} \nSAVE_EVERY: {SAVE_EVERY} "
+    f"GRAD_ACCUM_STEPS: {GRAD_ACCUM_STEPS} "
     f"\nDEVICE: {DEVICE} \nDTYPE: {DTYPE} \nUSE_AMP: {USE_AMP} "
     f"\nAMP_DTYPE: {AMP_DTYPE if USE_AMP else 'n/a'} \nUSE_SCALER: {USE_SCALER}"
+    f"\nRESUME FROM CHECKPOINT: {RESUME_CHECKPOINT}"
 )
 
 # -------------------------
@@ -50,8 +57,8 @@ vae = VAE(torch_dtype=DTYPE).to(DEVICE)
 unet = UnetLora(torch_dtype=DTYPE, in_channels=UNET_IN_CHANNELS).to(DEVICE)
 clip = CLIPEncoder().to(DEVICE)
 
-scheduler = Scheduler()
-val_scheduler = Scheduler().scheduler
+scheduler = Scheduler(train=True)
+val_scheduler = Scheduler(train=True).scheduler
 prediction_type = scheduler.scheduler.config.prediction_type
 scaler = torch.cuda.amp.GradScaler(enabled=USE_SCALER)
 if prediction_type != "epsilon":
@@ -113,6 +120,7 @@ if len(lora_trainable) == 0:
 # -------------------------
 # 5. Prepare DataLoader
 # -------------------------
+print("Preparing DataLoader...")
 dataset = PicoBananaDataset(
     config.get("dataset_root", "data/pico-banana"),
     clip.tokenizer,
@@ -132,27 +140,54 @@ loader = DataLoader(
 # 6. Training Loop
 # -------------------------
 step = 0
+global_step = 0
+optimizer.zero_grad(set_to_none=True)
 
+null_ids = clip.tokenizer(
+    [""] * BATCH_SIZE,
+    padding="max_length",
+    truncation=True,
+    return_tensors="pt"
+).input_ids.to(DEVICE)
+
+print("STARTING TRAINING")
 if RESUME_CHECKPOINT:
-    step = int(state.get("step", 0))
-    print(f"Resuming from step: {step}")
+    start_step = int(state.get("step", 0))
+    step = start_step
+    global_step = start_step * GRAD_ACCUM_STEPS
+    print(f"Resuming from step: {start_step}")
 
 loss_history = deque(maxlen=LOSS_WINDOW)
 use_amp_runtime = USE_AMP
+
 while step < STEPS:
     for src_imgs, tgt_imgs, instr_ids in tqdm(loader, file=sys.stdout):
         if step >= STEPS:
             break
         
+        drop_mask = torch.rand(src_imgs.shape[0], device=DEVICE)
+        drop_text = drop_mask < COND_DROPOUT
+        drop_image = (drop_mask >= COND_DROPOUT) & (drop_mask < 2 * COND_DROPOUT)
+        drop_both = (drop_mask >= 2 * COND_DROPOUT) & (drop_mask < 3 * COND_DROPOUT)
+        
         # move to device
         src_imgs = src_imgs.to(DEVICE, dtype=DTYPE)
         tgt_imgs = tgt_imgs.to(DEVICE, dtype=DTYPE)
         instr_ids = instr_ids.to(DEVICE)
+        
+        instr_ids = torch.where(
+            drop_text[:, None] | drop_both[:, None],
+            null_ids[:instr_ids.shape[0]],
+            instr_ids
+        )
 
         # encode images
         with torch.no_grad():
             z_src = vae.encode(src_imgs).latent_dist.sample() * 0.18215
             z_tgt = vae.encode(tgt_imgs).latent_dist.sample() * 0.18215
+            
+            mask = (~(drop_image | drop_both)).float().view(-1,1,1,1)
+            z_src = z_src * mask
 
         # sample noise
         noise = torch.randn_like(z_tgt)
@@ -175,77 +210,48 @@ while step < STEPS:
             ).sample
 
             loss = torch.nn.functional.mse_loss(eps_pred, noise)
-            
-        optimizer.zero_grad(set_to_none=True)
-        # check loss is finite
-        if not torch.isfinite(loss):
-            print(
-                f"[warn] non-finite loss at step {step} "
-                f"(amp={use_amp_runtime}, amp_dtype={AMP_DTYPE if use_amp_runtime else 'n/a'})"
-            )
-            print(
-                f"[warn] finite flags: z_input={torch.isfinite(z_input).all().item()} "
-                f"text_emb={torch.isfinite(text_emb).all().item()} "
-                f"noise={torch.isfinite(noise).all().item()} "
-                f"eps_pred={torch.isfinite(eps_pred).all().item()}"
-            )
-            if use_amp_runtime:
-                # Retry same step in full precision, then keep AMP disabled for stability.
-                with nullcontext():
-                    eps_pred = unet_lora(
-                        z_input,
-                        t,
-                        encoder_hidden_states=text_emb,
-                    ).sample
-                    loss = torch.nn.functional.mse_loss(eps_pred, noise)
-                if torch.isfinite(loss):
-                    use_amp_runtime = False
-                    print("[warn] AMP disabled after instability; continuing in fp32 forward.")
-                else:
-                    raise RuntimeError(f"Non-finite loss at step {step}: {loss.item()}")
-            else:
-                raise RuntimeError(f"Non-finite loss at step {step}: {loss.item()}")
+            loss = loss / GRAD_ACCUM_STEPS
 
-        loss_history.append(loss.item())
+        loss_history.append(loss.item() * GRAD_ACCUM_STEPS)
+
+        loss.backward()
         
-        if step % LOG_EVERY == 0:
-            avg_loss = sum(loss_history) / len(loss_history)
-            print(f"[step {step}] loss = {loss.item():.6f} | loss_ma{LOSS_WINDOW} = {avg_loss:.6f}")
-
-        if USE_SCALER:
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(unet_lora.parameters(), max_norm=1.0)
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss.backward()
+        if (global_step + 1) % GRAD_ACCUM_STEPS == 0:
             torch.nn.utils.clip_grad_norm_(unet_lora.parameters(), max_norm=1.0)
             optimizer.step()
-        step += 1
-
-        # Save checkpoint
-        if step % SAVE_EVERY == 0:
-            ckpt_path = f"checkpoints/lora_step_{step}.pt"
-            os.makedirs("checkpoints", exist_ok=True)
+            optimizer.zero_grad(set_to_none=True)
+            step += 1
             
-            checkpoint = {
-                "model": unet_lora.state_dict(),
-                "optimizer": optimizer.state_dict(),  # save optimizer state
-                "step": step
-            }
+            #logging
+            if step % LOG_EVERY == 0:
+                true_loss = loss.item() * GRAD_ACCUM_STEPS
+                avg_loss = sum(loss_history) / len(loss_history)
+                print(f"[step {step}] loss = {true_loss:.6f} | loss_ma{LOSS_WINDOW} = {avg_loss:.6f}")
             
-            torch.save(checkpoint, ckpt_path)
-            print(f"Saved checkpoint: {ckpt_path}")
-            run_validation(
-                step=step,
-                config=config,
-                device=DEVICE,
-                dtype=DTYPE,
-                vae=vae,
-                clip=clip,
-                unet_lora=unet_lora,
-                val_scheduler=val_scheduler,
-                use_amp_runtime=use_amp_runtime,
-                amp_dtype=AMP_DTYPE,
-            )
+            if step % SAVE_EVERY == 0:
+                
+                ckpt_path = f"checkpoints/lora_step_summary_{step}.pt"
+                os.makedirs("checkpoints", exist_ok=True)
+                
+                checkpoint = {
+                    "model": unet_lora.state_dict(),
+                    "optimizer": optimizer.state_dict(),  # save optimizer state
+                    "step": step
+                }
+                
+                torch.save(checkpoint, ckpt_path)
+                print(f"Saved checkpoint: {ckpt_path}")
+                run_validation(
+                    step=step,
+                    config=config,
+                    device=DEVICE,
+                    dtype=DTYPE,
+                    vae=vae,
+                    clip=clip,
+                    unet_lora=unet_lora,
+                    val_scheduler=val_scheduler,
+                    use_amp_runtime=use_amp_runtime,
+                    amp_dtype=AMP_DTYPE,
+                )
+                  
+        global_step += 1
