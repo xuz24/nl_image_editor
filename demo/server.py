@@ -13,8 +13,8 @@ from flask import Flask, jsonify, request, send_file, send_from_directory
 
 app = Flask(__name__, static_folder=".")
 
-UPLOAD_DIR = Path("uploads")
-OUTPUT_DIR = Path("outputs")
+UPLOAD_DIR = Path(__file__).parent.parent / "uploads"
+OUTPUT_DIR = Path(__file__).parent.parent / "outputs"
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
@@ -60,7 +60,9 @@ def edit():
         cmd += ["--seed", seed]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        REPO_ROOT = Path(__file__).parent.parent  # demo/ -> repo root
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=REPO_ROOT)
+        
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Inference timed out (>5 min)."}), 500
 
