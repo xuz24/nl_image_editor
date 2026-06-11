@@ -61,7 +61,7 @@ def edit():
 
     try:
         REPO_ROOT = Path(__file__).parent.parent  # demo/ -> repo root
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=REPO_ROOT)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=REPO_ROOT, env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},)
         
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Inference timed out (>5 min)."}), 500
