@@ -46,7 +46,7 @@ def edit():
     request.files["image"].save(src_path)
 
     cmd = [
-        "python", "run_inference.py",
+        "python", "inference/run_inference.py",
         "--source", str(src_path),
         "--instruction", instruction,
         "--checkpoint", CHECKPOINT,
