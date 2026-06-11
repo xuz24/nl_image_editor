@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Diffusion Editor</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0e0e10;
+    --surface: #18181b;
+    --surface2: #222227;
+    --border: rgba(255,255,255,0.1);
+    --text: #f4f4f5;
+    --muted: #a1a1aa;
+    --accent: #a78bfa;
+    --accent-dim: rgba(167,139,250,0.15);
+    --danger: #f87171;
+    --radius: 10px;
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    padding: 1.25rem 2rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  header svg { flex-shrink: 0; }
+
+  header h1 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  header span {
+    font-size: 0.8rem;
+    color: var(--muted);
+    font-weight: 400;
+    margin-left: 0.25rem;
+  }
+
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    gap: 0;
+    overflow: hidden;
+  }
+
+  /* ── Left panel ── */
+  .panel {
+    padding: 1.5rem;
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    overflow-y: auto;
+  }
+
+  .field label {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin-bottom: 0.5rem;
+  }
+
+  /* Drop zone */
+  .dropzone {
+    border: 1.5px dashed var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: 1.75rem 1rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    position: relative;
+    min-height: 140px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+  .dropzone.drag-over,
+  .dropzone:hover {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+  }
+  .dropzone input[type="file"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+  .dropzone .dz-icon {
+    width: 36px;
+    height: 36px;
+    color: var(--accent);
+  }
+  .dropzone p { font-size: 0.85rem; color: var(--muted); }
+  .dropzone strong { color: var(--text); font-weight: 500; }
+
+  .thumb {
+    width: 100%;
+    border-radius: var(--radius);
+    object-fit: cover;
+    max-height: 200px;
+    display: block;
+    border: 1px solid var(--border);
+  }
+
+  /* Instruction */
+  textarea {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 0.9rem;
+    padding: 0.65rem 0.75rem;
+    resize: vertical;
+    min-height: 90px;
+    transition: border-color 0.15s;
+    outline: none;
+  }
+  textarea:focus { border-color: var(--accent); }
+  textarea::placeholder { color: var(--muted); }
+
+  /* Collapsible advanced */
+  details { border: 1px solid var(--border); border-radius: var(--radius); }
+  summary {
+    padding: 0.6rem 0.75rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  summary::after {
+    content: '▾';
+    margin-left: auto;
+    font-size: 0.7rem;
+  }
+  details[open] summary::after { content: '▴'; }
+  .details-body {
+    padding: 0.75rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .slider-row label {
+    font-size: 0.8rem;
+    color: var(--muted);
+    min-width: 60px;
+  }
+  input[type="range"] {
+    flex: 1;
+    accent-color: var(--accent);
+  }
+  .slider-val {
+    font-size: 0.8rem;
+    font-weight: 600;
+    min-width: 28px;
+    text-align: right;
+  }
+
+  input[type="number"] {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 0.85rem;
+    padding: 0.4rem 0.6rem;
+    width: 100%;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  input[type="number"]:focus { border-color: var(--accent); }
+
+  /* Run button */
+  .run-btn {
+    width: 100%;
+    padding: 0.75rem;
+    border-radius: var(--radius);
+    border: none;
+    background: var(--accent);
+    color: #0e0e10;
+    font-family: var(--font);
+    font-size: 0.9rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.15s, transform 0.1s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    letter-spacing: -0.01em;
+  }
+  .run-btn:hover:not(:disabled) { opacity: 0.88; }
+  .run-btn:active:not(:disabled) { transform: scale(0.98); }
+  .run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ── Canvas area ── */
+  .canvas {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    overflow: hidden;
+  }
+
+  .canvas-header {
+    padding: 0.75rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .canvas-header .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+  }
+  .canvas-header .dot.active { background: #4ade80; }
+
+  .canvas-body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    overflow: auto;
+  }
+
+  /* Empty state */
+  .empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    color: var(--muted);
+    text-align: center;
+  }
+  .empty svg { opacity: 0.35; }
+  .empty p { font-size: 0.9rem; max-width: 260px; line-height: 1.6; }
+
+  /* Result comparison */
+  .compare-wrap {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    max-width: 900px;
+    width: 100%;
+  }
+  .compare-item {
+    flex: 1;
+    min-width: 200px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .compare-item span {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+  }
+  .compare-item img {
+    width: 100%;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    object-fit: contain;
+    background: var(--surface);
+  }
+
+  .dl-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.45rem 0.85rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background 0.15s;
+    align-self: flex-start;
+  }
+  .dl-btn:hover { background: var(--surface); }
+
+  /* Spinner */
+  .spinner-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner {
+    width: 36px;
+    height: 36px;
+    border: 3px solid var(--surface2);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  /* Error */
+  .error-box {
+    background: rgba(248,113,113,0.1);
+    border: 1px solid rgba(248,113,113,0.35);
+    border-radius: var(--radius);
+    padding: 1rem 1.25rem;
+    font-size: 0.88rem;
+    color: var(--danger);
+    max-width: 420px;
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect width="22" height="22" rx="6" fill="#a78bfa" fill-opacity="0.2"/>
+    <path d="M6 16L10 8L14 12L17 7" stroke="#a78bfa" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="6" cy="16" r="1.5" fill="#a78bfa"/>
+  </svg>
+  <h1>Diffusion Editor <span>LoRA</span></h1>
+</header>
+
+<main>
+  <!-- Left panel -->
+  <div class="panel">
+
+    <div class="field" id="dropfield">
+      <label>Source image</label>
+      <div class="dropzone" id="dropzone">
+        <input type="file" id="fileInput" accept="image/*" />
+        <svg class="dz-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="3"/>
+          <circle cx="8.5" cy="8.5" r="1.5"/>
+          <path d="m21 15-5-5L5 21"/>
+        </svg>
+        <p><strong>Click or drag</strong> to upload</p>
+        <p>PNG, JPG, WebP</p>
+      </div>
+      <img id="thumb" class="thumb" style="display:none; margin-top:0.75rem;" alt="Source preview" />
+    </div>
+
+    <div class="field">
+      <label>Edit instruction</label>
+      <textarea id="instruction" placeholder="e.g. make the sky more dramatic, turn the apples into oranges, add snow on the ground…" rows="4"></textarea>
+    </div>
+
+    <details>
+      <summary>Advanced options</summary>
+      <div class="details-body">
+        <div class="slider-row">
+          <label>Steps</label>
+          <input type="range" id="steps" min="10" max="100" value="50" step="1" />
+          <span class="slider-val" id="steps-val">50</span>
+        </div>
+        <div>
+          <label style="font-size:0.8rem;color:var(--muted);display:block;margin-bottom:0.35rem;">Seed (leave blank for random)</label>
+          <input type="number" id="seed" placeholder="e.g. 42" />
+        </div>
+      </div>
+    </details>
+
+    <button class="run-btn" id="runBtn" disabled>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="5,2 14,8 5,14" fill="currentColor" stroke="none"/>
+      </svg>
+      Run inference
+    </button>
+
+  </div>
+
+  <!-- Canvas -->
+  <div class="canvas">
+    <div class="canvas-header">
+      <div class="dot" id="statusDot"></div>
+      <span id="statusText">Waiting for input</span>
+    </div>
+    <div class="canvas-body" id="canvasBody">
+      <div class="empty">
+        <svg width="64" height="64" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="8" y="8" width="48" height="48" rx="8"/>
+          <circle cx="22" cy="24" r="4"/>
+          <path d="M56 40L44 28 32 40 22 32 8 44"/>
+        </svg>
+        <p>Upload an image and write an instruction to get started.</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+  const fileInput = document.getElementById('fileInput');
+  const dropzone  = document.getElementById('dropzone');
+  const thumb     = document.getElementById('thumb');
+  const textarea  = document.getElementById('instruction');
+  const stepsEl   = document.getElementById('steps');
+  const stepsVal  = document.getElementById('steps-val');
+  const seedEl    = document.getElementById('seed');
+  const runBtn    = document.getElementById('runBtn');
+  const canvasBody = document.getElementById('canvasBody');
+  const statusDot  = document.getElementById('statusDot');
+  const statusText = document.getElementById('statusText');
+
+  let srcFile = null;
+  let srcObjectURL = null;
+
+  stepsEl.addEventListener('input', () => { stepsVal.textContent = stepsEl.value; });
+
+  function setStatus(state, msg) {
+    statusDot.className = 'dot' + (state === 'active' ? ' active' : '');
+    statusText.textContent = msg;
+  }
+
+  function checkReady() {
+    runBtn.disabled = !(srcFile && textarea.value.trim());
+  }
+
+  textarea.addEventListener('input', checkReady);
+
+  function handleFile(file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    srcFile = file;
+    if (srcObjectURL) URL.revokeObjectURL(srcObjectURL);
+    srcObjectURL = URL.createObjectURL(file);
+    thumb.src = srcObjectURL;
+    thumb.style.display = 'block';
+    checkReady();
+    setStatus('', 'Image loaded — ready to run');
+  }
+
+  fileInput.addEventListener('change', () => handleFile(fileInput.files[0]));
+
+  dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag-over'); });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+  dropzone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropzone.classList.remove('drag-over');
+    handleFile(e.dataTransfer.files[0]);
+  });
+
+  function showSpinner(msg) {
+    canvasBody.innerHTML = `
+      <div class="spinner-wrap">
+        <div class="spinner"></div>
+        <span>${msg}</span>
+      </div>`;
+  }
+
+  function showError(msg) {
+    canvasBody.innerHTML = `<div class="error-box">⚠ ${escHtml(msg)}</div>`;
+  }
+
+  function showResult(srcURL, resultURL) {
+    canvasBody.innerHTML = `
+      <div class="compare-wrap">
+        <div class="compare-item">
+          <span>Source</span>
+          <img src="${srcURL}" alt="Source image" />
+        </div>
+        <div class="compare-item">
+          <span>Edited</span>
+          <img src="${resultURL}" alt="Edited result" />
+          <a class="dl-btn" href="${resultURL}" download="edited.png">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 2v9M4 8l4 4 4-4"/><path d="M2 14h12"/>
+            </svg>
+            Download
+          </a>
+        </div>
+      </div>`;
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  runBtn.addEventListener('click', async () => {
+    if (!srcFile) return;
+    const instruction = textarea.value.trim();
+    if (!instruction) return;
+
+    runBtn.disabled = true;
+    setStatus('active', 'Running inference…');
+    showSpinner(`Running ${stepsEl.value} DDIM steps…`);
+
+    const fd = new FormData();
+    fd.append('image', srcFile);
+    fd.append('instruction', instruction);
+    fd.append('steps', stepsEl.value);
+    if (seedEl.value) fd.append('seed', seedEl.value);
+
+    try {
+      const res = await fetch('/edit', { method: 'POST', body: fd });
+      const json = await res.json();
+
+      if (!res.ok || json.error) {
+        setStatus('', 'Error');
+        showError(json.error || 'Unknown server error.');
+        return;
+      }
+
+      const resultURL = `/result/${json.result_id}`;
+      setStatus('active', 'Done');
+      showResult(srcObjectURL, resultURL);
+    } catch (err) {
+      setStatus('', 'Network error');
+      showError('Could not reach the server. Is it running?');
+    } finally {
+      runBtn.disabled = false;
+      checkReady();
+    }
+  });
+</script>
+
+</body>
+</html>
