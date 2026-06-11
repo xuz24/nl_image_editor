@@ -6,7 +6,8 @@ from pathlib import Path
 import torch
 from PIL import Image
 from torchvision import transforms
-
+import random
+import numpy as np
 
 def save_tensor_as_image(tensor: torch.Tensor, path: Path) -> None:
     tensor = tensor.clamp(-1, 1)
@@ -15,7 +16,15 @@ def save_tensor_as_image(tensor: torch.Tensor, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(image).save(path)
 
+def set_seeds(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    
 def run_validation(
     *,
     step: int,

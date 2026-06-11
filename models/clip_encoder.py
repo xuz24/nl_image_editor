@@ -5,7 +5,6 @@ from transformers import CLIPTextModel, CLIPTokenizer
 
 
 class CLIPEncoder:
-    """Wrapper that keeps tokenizer + text encoder on the same device."""
 
     def __init__(self, model_name: str = "openai/clip-vit-large-patch14"):
         self.tokenizer = CLIPTokenizer.from_pretrained(model_name)

@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 """
-Run inference with a trained Pico-Banana LoRA checkpoint.
-
-Given a source image and an edit instruction, this script encodes the source
-image, performs DDIM sampling with the trained LoRA UNet (using concatenated
-source + noisy latents), and decodes the edited result.
+Run inference with dual-condition classifier-free guidance (image + text).
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 
 import torch
@@ -52,8 +47,7 @@ def preprocess_image(path: Path, resolution: int, device: torch.device) -> torch
         ]
     )
     img = Image.open(path).convert("RGB")
-    tensor = tfm(img).unsqueeze(0).to(device)
-    return tensor
+    return tfm(img).unsqueeze(0).to(device)
 
 
 def save_image(tensor: torch.Tensor, path: Path) -> None:
@@ -64,14 +58,19 @@ def save_image(tensor: torch.Tensor, path: Path) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Pico-Banana LoRA inference.")
-    parser.add_argument("--source", required=True, help="Path to the source image to edit.")
-    parser.add_argument("--instruction", required=True, help="Edit instruction text.")
-    parser.add_argument("--checkpoint", required=True, help="LoRA checkpoint path (e.g., checkpoints/lora_step_5000.pt).")
-    parser.add_argument("--output", default="outputs/edited.png", help="Where to save the edited image.")
-    parser.add_argument("--steps", type=int, default=50, help="Number of DDIM inference steps.")
-    parser.add_argument("--seed", type=int, default=None, help="Optional random seed for reproducibility.")
-    parser.add_argument("--config", default="configs/training_config.yaml", help="Training config file for resolution + LoRA parms.")
+    parser = argparse.ArgumentParser(description="Run Pico-Banana LoRA inference with dual CFG.")
+    parser.add_argument("--source", required=True)
+    parser.add_argument("--instruction", required=True)
+    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--output", default="outputs/edited.png")
+    parser.add_argument("--steps", type=int, default=50)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--config", default="configs/training_config.yaml")
+
+    # NEW: guidance strengths
+    parser.add_argument("--sI", type=float, default=1.6, help="Image guidance scale")
+    parser.add_argument("--sT", type=float, default=7.5, help="Text guidance scale")
+
     return parser.parse_args()
 
 
@@ -89,8 +88,10 @@ def main() -> None:
     # Models
     vae = VAE(torch_dtype=dtype).to(device)
     unet = UnetLora(torch_dtype=dtype, in_channels=8).to(device)
+
     lora_config = build_lora_config(cfg)
     unet_lora = unet.get_model(lora_config)
+
     state = torch.load(args.checkpoint, map_location=device)
     unet_lora.load_state_dict(state["model"], strict=False)
     unet_lora.eval()
@@ -98,14 +99,16 @@ def main() -> None:
     clip = CLIPEncoder().to(device)
     clip.text_encoder.eval()
 
-    scheduler = Scheduler()
+    scheduler = Scheduler(train=False)
     scheduler.scheduler.set_timesteps(args.steps)
 
-    # Inputs
+    # --- Input image ---
     src_tensor = preprocess_image(Path(args.source), resolution, device)
+
     with torch.no_grad():
         z_src = vae.encode(src_tensor).latent_dist.sample() * LATENT_SCALING
 
+    # --- Text embedding ---
     tokenized = clip.tokenizer(
         args.instruction,
         padding="max_length",
@@ -114,23 +117,65 @@ def main() -> None:
         return_tensors="pt",
     )
     text_ids = tokenized.input_ids.to(device)
-    text_emb = clip.text_encoder(text_ids)[0]
 
-    # DDIM sampling
+    with torch.no_grad():
+        text_emb = clip.text_encoder(text_ids)[0]
+
+    # --- Null text embedding ---
+    null_tokenized = clip.tokenizer(
+        "",
+        padding="max_length",
+        truncation=True,
+        max_length=77,
+        return_tensors="pt",
+    )
+    null_ids = null_tokenized.input_ids.to(device)
+
+    with torch.no_grad():
+        null_text_emb = clip.text_encoder(null_ids)[0]
+
+    # --- Null image ---
+    zero_src = torch.zeros_like(z_src)
+
+    # --- Sampling ---
     z = torch.randn_like(z_src)
+
     for timestep in scheduler.scheduler.timesteps:
         with torch.no_grad():
-            z_input = torch.cat([z, z_src], dim=1)
-            noise_pred = unet_lora(z_input, timestep, encoder_hidden_states=text_emb).sample
+
+            # -------- Batch 3 conditions together (fast) --------
+            z_batch = torch.cat([z, z, z], dim=0)
+            src_batch = torch.cat([zero_src, z_src, z_src], dim=0)
+            text_batch = torch.cat([null_text_emb, null_text_emb, text_emb], dim=0)
+
+            z_input = torch.cat([z_batch, src_batch], dim=1)
+            
+            outputs = unet_lora(
+                z_input,
+                timestep,
+                encoder_hidden_states=text_batch
+            ).sample
+
+            e_uncond, e_img, e_full = outputs.chunk(3)
+
+            # -------- Dual CFG --------
+            noise_pred = (
+                e_uncond
+                + args.sI * (e_img - e_uncond)
+                + args.sT * (e_full - e_img)
+            )
+
             step_output = scheduler.scheduler.step(noise_pred, timestep, z)
             z = step_output.prev_sample
 
+    # --- Decode ---
     with torch.no_grad():
         edited = vae.decode(z / LATENT_SCALING).sample
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     save_image(edited, output_path)
+
     print(f"Saved edited image to {output_path}")
 
 
