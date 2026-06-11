@@ -52,6 +52,8 @@ def edit():
         "--checkpoint", CHECKPOINT,
         "--output", str(out_path),
         "--steps", str(steps),
+        "--sI", request.form.get("sI", "1.6"),
+        "--sT", request.form.get("sT", "7.5"),
         "--config", CONFIG,
     ]
     if seed:
