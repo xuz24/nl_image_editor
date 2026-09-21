@@ -28,6 +28,6 @@ This project implements an **InstructPix2Pix–style diffusion model** for **ins
 
 
 ## Run demo
-1. open 'demo.ipynb' in Google Colab
+1. open `demo.ipynb` in Google Colab
 2. run the cells in order
 ---
