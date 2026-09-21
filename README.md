@@ -26,4 +26,8 @@ This project implements an **InstructPix2Pix–style diffusion model** for **ins
 3. **Training:** (Currently here) Train on 250k+ paired examples with classifier-free guidance.
 4. **Evaluation:** Pending; to measure instruction alignment and image fidelity on real world samples.
 
+
+## Run demo
+1. open 'demo.ipynb' in Google Colab
+2. run the cells in order
 ---
