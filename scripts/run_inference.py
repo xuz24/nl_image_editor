@@ -16,7 +16,7 @@ import yaml
 from models.vae import VAE
 from models.clip_encoder import CLIPEncoder
 from models.unet_lora import UnetLora
-from diffusion.scheduler import Scheduler
+from models.scheduler import Scheduler
 from peft import LoraConfig, TaskType
 
 LATENT_SCALING = 0.18215

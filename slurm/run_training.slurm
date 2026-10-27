@@ -89,4 +89,4 @@ python -m pip install --requirement requirements.txt --progress-bar off
 # resume_checkpoint: /home/xuzijie/nl_image_editor/checkpoints/lora_step_summary_10000.pt
 # EOF
 # resume_checkpoint: /home/xuzijie/nl_image_editor/checkpoints/lora_step_18000.pt
-python -u training/train_lora.py
+python -u -m scripts.train_lora

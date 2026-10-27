@@ -46,7 +46,7 @@ OUTPUT_PATH=${OUTPUT_PATH:-outputs/inference_${SLURM_JOB_ID}.png}
 STEPS=${STEPS:-100}
 SEED=${SEED:-42}
 
-python inference/run_inference.py \
+python -m scripts.run_inference \
   --source "$SOURCE_IMAGE" \
   --instruction "$INSTRUCTION" \
   --checkpoint "$CHECKPOINT" \

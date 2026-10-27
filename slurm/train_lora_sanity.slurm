@@ -90,4 +90,4 @@ resume_checkpoint: /home/xuzijie/nl_image_editor/checkpoints/lora_step_1000.pt
 EOF
 
 # Run the shortened training loop.
-python -u training/train_lora.py
+python -u -m scripts.train_lora
